@@ -2,6 +2,7 @@ import { MessageSquare, Clock, Copy, History, Trash2, Sparkles, Mic, Quote } fro
 import type { HistoryRecord } from "../types";
 import { formatTimestamp } from "../utils";
 import type { MouseEvent as ReactMouseEvent } from "react";
+import { TnlDiagnosticsBadge, TnlDiagnosticsSummary } from "../components/history/TnlDiagnosticsSummary";
 
 export type HistoryPageProps = {
   history: HistoryRecord[];
@@ -55,6 +56,7 @@ export function HistoryPage({ history, onCopyText, onClear }: HistoryPageProps) 
                   </span>
                   {record.success ? (
                     <div className="flex items-center gap-2">
+                      <TnlDiagnosticsBadge diagnostics={record.tnlDiagnostics} />
                       {record.mode === "assistant" ? (
                         <span className="text-[10px] bg-[rgba(217,119,87,0.12)] text-[var(--crail)] px-1.5 py-0.5 rounded">
                           AI 助手
@@ -191,6 +193,8 @@ export function HistoryPage({ history, onCopyText, onClear }: HistoryPageProps) 
                 ) : (
                   <p className="text-sm text-red-700 line-clamp-3">{record.errorMessage}</p>
                 )}
+
+                {record.success && <TnlDiagnosticsSummary diagnostics={record.tnlDiagnostics} />}
               </div>
             ))
           )}

@@ -102,6 +102,14 @@ impl ChatOptions {
             temperature: 0.5,
         }
     }
+
+    /// 用于 TNL 候选仲裁的参数（短 JSON、低温度）
+    pub fn for_candidate_arbitration() -> Self {
+        Self {
+            max_tokens: 256,
+            temperature: 0.1,
+        }
+    }
 }
 
 // ============================================================================
@@ -244,8 +252,13 @@ impl OpenAiClient {
         if body.is_empty() {
             anyhow::bail!("OpenAI API 返回空响应体");
         }
-        let payload: Value = serde_json::from_str(&body)
-            .map_err(|e| anyhow::anyhow!("OpenAI API 返回非 JSON 响应: {} (前100字符: {})", e, &body[..body.len().min(100)]))?;
+        let payload: Value = serde_json::from_str(&body).map_err(|e| {
+            anyhow::anyhow!(
+                "OpenAI API 返回非 JSON 响应: {} (前100字符: {})",
+                e,
+                &body[..body.len().min(100)]
+            )
+        })?;
 
         // 解析 OpenAI 格式的响应
         let content = payload["choices"]
@@ -303,6 +316,10 @@ mod tests {
         let smart = ChatOptions::for_smart_command();
         assert_eq!(smart.max_tokens, 2048);
         assert_eq!(smart.temperature, 0.5);
+
+        let arbitration = ChatOptions::for_candidate_arbitration();
+        assert_eq!(arbitration.max_tokens, 256);
+        assert_eq!(arbitration.temperature, 0.1);
     }
 
     #[test]

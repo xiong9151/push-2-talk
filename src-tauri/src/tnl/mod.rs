@@ -17,6 +17,12 @@ mod tokenizer;
 mod types;
 
 pub use engine::TnlEngine;
+pub use types::{
+    TnlArbitrationSummary, TnlCandidate, TnlCandidateArbitrationResult, TnlCandidateDecision,
+    TnlDiagnostics,
+};
+#[allow(unused_imports)]
+pub use types::{TnlCandidateRisk, TnlCandidateSource};
 
 /// 判断字符串是否仅包含 ASCII 数字
 ///

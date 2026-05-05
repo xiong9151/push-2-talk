@@ -243,6 +243,7 @@ fn emit_conversation_history(app: &AppHandle, session: &ConversationSession, ins
         total_time_ms: total_asr + total_llm,
         mode: Some("assistant".to_string()),
         inserted: Some(inserted),
+        tnl_diagnostics: None,
     };
     let _ = app.emit("transcription_complete", result);
 }
@@ -2528,12 +2529,8 @@ async fn handle_assistant_mode(
                         session.turns.push(turn.clone());
                     } else {
                         // 用户在处理期间关闭了面板，丢弃结果
-                        tracing::warn!(
-                            "AI 助手: 追问完成但会话已关闭，丢弃结果"
-                        );
-                        state
-                            .is_assistant_processing
-                            .store(false, Ordering::SeqCst);
+                        tracing::warn!("AI 助手: 追问完成但会话已关闭，丢弃结果");
+                        state.is_assistant_processing.store(false, Ordering::SeqCst);
                         return;
                     }
                 }
@@ -2569,9 +2566,7 @@ async fn handle_assistant_mode(
             }
         }
 
-        state
-            .is_assistant_processing
-            .store(false, Ordering::SeqCst);
+        state.is_assistant_processing.store(false, Ordering::SeqCst);
     } else {
         // =================== 新会话路径 ===================
 
@@ -2603,7 +2598,9 @@ async fn handle_assistant_mode(
         let llm_start = std::time::Instant::now();
 
         let result = if let Some(ref text) = selected_text {
-            processor.process_with_context(&user_instruction, text).await
+            processor
+                .process_with_context(&user_instruction, text)
+                .await
         } else {
             processor.process(&user_instruction).await
         };
@@ -3339,6 +3336,8 @@ struct TranscriptionResult {
     mode: Option<String>, // 新增：处理模式
     #[serde(skip_serializing_if = "Option::is_none")]
     inserted: Option<bool>, // 新增：是否已自动插入
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tnl_diagnostics: Option<tnl::TnlDiagnostics>, // 可选：TNL 候选/替换诊断
 }
 
 /// 处理转录结果（听写模式专用，使用 NormalPipeline）
@@ -3413,6 +3412,7 @@ async fn handle_transcription_result(
                 total_time_ms: result.total_time_ms,
                 mode: Some(format!("{:?}", result.mode).to_lowercase()),
                 inserted: Some(result.inserted),
+                tnl_diagnostics: result.tnl_diagnostics,
             };
 
             // 发送完成事件
@@ -4166,10 +4166,7 @@ async fn paste_latest_reply(
     app: AppHandle,
     state: tauri::State<'_, AppState>,
 ) -> Result<String, String> {
-    let session = {
-        state.conversation_session.lock().unwrap().take()
-    }
-    .ok_or("无待处理的结果")?;
+    let session = { state.conversation_session.lock().unwrap().take() }.ok_or("无待处理的结果")?;
 
     let last_turn = session.turns.last().ok_or("会话中无回复")?;
     let result_text = last_turn.assistant_response.clone();
@@ -4365,9 +4362,7 @@ async fn send_text_question(
                 } else {
                     // 用户在处理期间关闭了面板，丢弃结果
                     tracing::warn!("AI 助手: 文本追问完成但会话已关闭，丢弃结果");
-                    state
-                        .is_assistant_processing
-                        .store(false, Ordering::SeqCst);
+                    state.is_assistant_processing.store(false, Ordering::SeqCst);
                     return Ok(());
                 }
             }
@@ -4398,9 +4393,7 @@ async fn send_text_question(
         }
     }
 
-    state
-        .is_assistant_processing
-        .store(false, Ordering::SeqCst);
+    state.is_assistant_processing.store(false, Ordering::SeqCst);
 
     Ok(())
 }

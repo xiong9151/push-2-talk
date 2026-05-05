@@ -152,6 +152,57 @@ export interface TranscriptionResult {
   total_time_ms: number;
   mode?: string; // "normal" | "assistant"
   inserted?: boolean;
+  tnl_diagnostics?: TnlDiagnostics;
+}
+
+export type TnlCandidateRisk = "low" | "medium" | "high";
+
+export type TnlCandidateSource =
+  | "spoken_symbol"
+  | "dictionary_exact"
+  | "dictionary_fuzzy"
+  | "dictionary_pinyin"
+  | "dictionary_phonetic"
+  | "letter_merge";
+
+export type TnlCandidateDecision =
+  | "applied_local"
+  | "pending_llm"
+  | "applied_llm"
+  | "rejected_local"
+  | "rejected_llm"
+  | "skipped_disabled"
+  | "skipped_no_processor"
+  | "skipped_timeout"
+  | "skipped_error"
+  | "skipped_limit";
+
+export interface TnlCandidate {
+  id: string;
+  original: string;
+  target: string;
+  start: number;
+  end: number;
+  score: number;
+  risk: TnlCandidateRisk;
+  source: TnlCandidateSource;
+  evidence: string[];
+  decision: TnlCandidateDecision;
+}
+
+export interface TnlArbitrationSummary {
+  attempted: boolean;
+  candidate_count: number;
+  applied_count: number;
+  rejected_count: number;
+  skipped_count: number;
+  elapsed_ms?: number;
+  reason?: string;
+}
+
+export interface TnlDiagnostics {
+  candidates: TnlCandidate[];
+  arbitration?: TnlArbitrationSummary;
 }
 
 // 历史记录
@@ -168,6 +219,7 @@ export interface HistoryRecord {
   totalTimeMs: number;
   success: boolean;
   errorMessage: string | null;
+  tnlDiagnostics?: TnlDiagnostics;
 }
 
 // ASR 服务商元数据

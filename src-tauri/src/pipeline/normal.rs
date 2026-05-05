@@ -7,7 +7,7 @@
 // 设计原则：Pipeline 不持有锁，所有依赖通过参数传入
 
 use anyhow::Result;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
 use super::types::{PipelineResult, TranscriptionContext, TranscriptionMode};
@@ -15,7 +15,9 @@ use crate::config::AppConfig;
 use crate::learning::coordinator::start_learning_observation;
 use crate::llm_post_processor::LlmPostProcessor;
 use crate::text_inserter::TextInserter;
-use crate::tnl::TnlEngine;
+use crate::tnl::{TnlCandidateDecision, TnlDiagnostics, TnlEngine};
+
+const CANDIDATE_ARBITRATION_TIMEOUT_MS: u64 = 800;
 
 /// 普通模式处理管道
 ///
@@ -68,7 +70,7 @@ impl NormalPipeline {
         );
 
         // 2. TNL 技术规范化（如果启用）
-        let (text, tnl_changed) = {
+        let (text, tnl_changed, tnl_diagnostics) = {
             // 从配置加载 TNL 开关
             let tnl_enabled = AppConfig::load()
                 .map(|(c, _)| c.tnl_config.enabled)
@@ -86,15 +88,26 @@ impl NormalPipeline {
                         tnl_result.applied.len()
                     );
                 }
-                (tnl_result.text, tnl_result.changed)
+                (tnl_result.text, tnl_result.changed, tnl_result.diagnostics)
             } else {
-                (asr_text.clone(), false)
+                (asr_text.clone(), false, None)
             }
         };
 
         // 注意：历史记录存储 ASR 原文（asr_text），LLM 处理使用 TNL 后文本（text）
 
-        // 3. 可选 LLM 后处理
+        // 3. 可选候选仲裁（绑定词库增强开关，不改变全文润色逻辑）
+        let pre_arbitration_text = text.clone();
+        let (text, tnl_diagnostics, candidate_llm_time_ms) = Self::maybe_arbitrate_candidates(
+            post_processor.clone(),
+            enable_dictionary_enhancement,
+            text,
+            tnl_diagnostics,
+        )
+        .await;
+        let candidate_changed = text != pre_arbitration_text;
+
+        // 4. 可选 LLM 后处理
         let (final_text, original_text, llm_time_ms) = Self::maybe_polish(
             app,
             post_processor,
@@ -104,15 +117,16 @@ impl NormalPipeline {
             &text,
         )
         .await;
+        let combined_llm_time_ms = Self::sum_llm_time(candidate_llm_time_ms, llm_time_ms);
 
-        // 4. 插入前隐藏窗口并主动恢复焦点到目标应用
+        // 5. 插入前隐藏窗口并主动恢复焦点到目标应用
         // 使用新的焦点恢复机制，确保文本插入到正确的窗口
         super::focus::hide_overlay_and_restore_focus(app, target_hwnd).await;
 
-        // 5. 插入文本
+        // 6. 插入文本
         let inserted = Self::insert_text(text_inserter, &final_text);
 
-        // 6. 触发学习观察（如果启用且插入成功）
+        // 7. 触发学习观察（如果启用且插入成功）
         if inserted {
             if let Some(hwnd) = target_hwnd {
                 if let Ok((config, _)) = AppConfig::load() {
@@ -128,29 +142,124 @@ impl NormalPipeline {
             }
         }
 
-        // 7. 返回结果
+        // 8. 返回结果
         // 历史记录存储 ASR 原文（约束 C14）
         // 决定是否显示双栏：
         // - 有 LLM 处理 → 使用 LLM 返回的 original_text
-        // - 无 LLM 处理但 TNL 改变了文本 → 设置原文以便前端显示双栏
+        // - 无 LLM 处理但 TNL/候选仲裁改变了文本 → 设置原文以便前端显示双栏
         // - 无 LLM 处理且 TNL 未改变文本 → 不显示双栏（original_text = None）
         let history_original = if original_text.is_some() {
             original_text
-        } else if tnl_changed {
+        } else if tnl_changed || candidate_changed {
             Some(asr_text)
         } else {
             None
         };
 
-        Ok(PipelineResult::success(
+        let mut result = PipelineResult::success(
             final_text,
             history_original,
             None, // 普通模式无引用文本
             asr_time_ms,
-            llm_time_ms,
+            combined_llm_time_ms,
             TranscriptionMode::Normal,
             inserted,
-        ))
+        );
+        result.tnl_diagnostics = tnl_diagnostics;
+
+        Ok(result)
+    }
+
+    async fn maybe_arbitrate_candidates(
+        processor: Option<LlmPostProcessor>,
+        enable_dictionary_enhancement: bool,
+        text: String,
+        diagnostics: Option<TnlDiagnostics>,
+    ) -> (String, Option<TnlDiagnostics>, Option<u64>) {
+        let Some(mut diagnostics) = diagnostics else {
+            return (text, None, None);
+        };
+
+        if !diagnostics.has_pending_llm() {
+            return (text, Some(diagnostics), None);
+        }
+
+        if !enable_dictionary_enhancement {
+            diagnostics.mark_pending_skipped(
+                TnlCandidateDecision::SkippedDisabled,
+                "dictionary_enhancement_disabled",
+                None,
+            );
+            return (text, Some(diagnostics), None);
+        }
+
+        let Some(processor) = processor else {
+            diagnostics.mark_pending_skipped(
+                TnlCandidateDecision::SkippedNoProcessor,
+                "llm_not_configured",
+                None,
+            );
+            return (text, Some(diagnostics), None);
+        };
+
+        tracing::info!(
+            "NormalPipeline: 开始 TNL 候选仲裁，候选数: {}",
+            diagnostics.pending_llm_count()
+        );
+
+        let fallback_diagnostics = diagnostics.clone();
+        let arbitration = tokio::time::timeout(
+            Duration::from_millis(CANDIDATE_ARBITRATION_TIMEOUT_MS),
+            processor.arbitrate_tnl_candidates(&text, diagnostics),
+        )
+        .await;
+
+        match arbitration {
+            Ok(Ok(result)) => {
+                tracing::info!(
+                    "NormalPipeline: TNL 候选仲裁完成 (耗时: {}ms)",
+                    result.elapsed_ms
+                );
+                (
+                    result.text,
+                    Some(result.diagnostics),
+                    Some(result.elapsed_ms),
+                )
+            }
+            Ok(Err(e)) => {
+                tracing::warn!("NormalPipeline: TNL 候选仲裁失败，保守跳过: {}", e);
+                let mut diagnostics = fallback_diagnostics;
+                diagnostics.mark_pending_skipped(
+                    TnlCandidateDecision::SkippedError,
+                    "arbitration_error",
+                    None,
+                );
+                (text, Some(diagnostics), None)
+            }
+            Err(_) => {
+                tracing::warn!("NormalPipeline: TNL 候选仲裁超时，保守跳过");
+                let mut diagnostics = fallback_diagnostics;
+                diagnostics.mark_pending_skipped(
+                    TnlCandidateDecision::SkippedTimeout,
+                    "arbitration_timeout",
+                    Some(CANDIDATE_ARBITRATION_TIMEOUT_MS),
+                );
+                (
+                    text,
+                    Some(diagnostics),
+                    Some(CANDIDATE_ARBITRATION_TIMEOUT_MS),
+                )
+            }
+        }
+    }
+
+    fn sum_llm_time(first: Option<u64>, second: Option<u64>) -> Option<u64> {
+        match (first, second) {
+            (Some(a), Some(b)) => Some(a + b),
+            (Some(a), None) => Some(a),
+            (None, Some(b)) => Some(b),
+            (None, None) => None,
+        }
     }
 
     /// 可选的 LLM 后处理

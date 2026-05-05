@@ -7,6 +7,8 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::tnl::TnlDiagnostics;
+
 /// 转录处理模式
 ///
 /// 决定 ASR 结果如何被后续处理
@@ -58,6 +60,9 @@ pub struct PipelineResult {
     pub mode: TranscriptionMode,
     /// 是否已自动插入文本
     pub inserted: bool,
+    /// 可选 TNL 候选诊断
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tnl_diagnostics: Option<TnlDiagnostics>,
 }
 
 impl PipelineResult {
@@ -80,6 +85,7 @@ impl PipelineResult {
             total_time_ms: asr_time_ms + llm_time_ms.unwrap_or(0),
             mode,
             inserted,
+            tnl_diagnostics: None,
         }
     }
 }

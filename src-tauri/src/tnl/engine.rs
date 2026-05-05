@@ -11,7 +11,15 @@ use crate::tnl::is_ascii_digits;
 use crate::tnl::rules::{ExtensionWhitelist, SpokenSymbolMap};
 use crate::tnl::tech_span::TechSpanDetector;
 use crate::tnl::tokenizer::{Token, TokenType, Tokenizer};
-use crate::tnl::types::{NormalizationResult, Replacement, ReplacementReason, Span};
+use crate::tnl::types::{
+    NormalizationResult, Replacement, ReplacementReason, Span, TnlCandidate, TnlCandidateDecision,
+    TnlCandidateRisk, TnlCandidateSource, TnlDiagnostics,
+};
+
+const PENDING_LLM_MIN_SCORE: f32 = 0.68;
+const LOCAL_APPLY_SCORE_CEILING: f32 = 0.88;
+const REJECTED_LOCAL_MIN_SCORE: f32 = 0.55;
+const MAX_DIAGNOSTIC_CANDIDATES: usize = 8;
 
 /// 合并连续的空格分隔单字母为大写缩写
 ///
@@ -224,6 +232,19 @@ impl TnlEngine {
         applied.extend(hyphen_replacements);
         applied.extend(phonetic_replacements);
 
+        let mut diagnostic_candidates: Vec<TnlCandidate> = applied
+            .iter()
+            .enumerate()
+            .map(|(idx, replacement)| TnlCandidate::from_replacement(idx, replacement))
+            .collect();
+        let next_candidate_index = diagnostic_candidates.len();
+        diagnostic_candidates.extend(self.collect_phonetic_diagnostic_candidates(
+            &replaced_text,
+            &applied,
+            next_candidate_index,
+        ));
+        let diagnostics = TnlDiagnostics::from_candidates(diagnostic_candidates);
+
         let elapsed_us = start.elapsed().as_micros() as u64;
         let changed = replaced_text != text;
 
@@ -233,6 +254,7 @@ impl TnlEngine {
             applied,
             technical_spans: tech_spans,
             elapsed_us,
+            diagnostics,
         }
     }
 
@@ -656,6 +678,162 @@ impl TnlEngine {
         }
 
         (result, replacements)
+    }
+
+    /// 收集中低置信英文音近候选，不直接改写文本。
+    fn collect_phonetic_diagnostic_candidates(
+        &self,
+        text: &str,
+        applied: &[Replacement],
+        start_index: usize,
+    ) -> Vec<TnlCandidate> {
+        let Some(matcher) = &self.fuzzy_matcher else {
+            return Vec::new();
+        };
+
+        let tokens = Tokenizer::tokenize(text);
+        let mut candidates = Vec::new();
+        let mut i = 0usize;
+        let mut candidate_index = start_index;
+
+        while i < tokens.len() && candidates.len() < MAX_DIAGNOSTIC_CANDIDATES {
+            let token = &tokens[i];
+            let is_english_word = token.token_type == TokenType::Ascii
+                && token.text.len() >= 2
+                && (token.text.chars().all(|c| c.is_ascii_alphabetic())
+                    || is_tech_token(&token.text));
+
+            if !is_english_word {
+                i += 1;
+                continue;
+            }
+
+            let mut english_run: Vec<(usize, &Token)> = vec![(i, token)];
+            let mut j = i + 1;
+
+            while j < tokens.len() {
+                let next = &tokens[j];
+                if next.token_type == TokenType::Whitespace {
+                    j += 1;
+                    if j < tokens.len() {
+                        let after_space = &tokens[j];
+                        let is_eng = after_space.token_type == TokenType::Ascii
+                            && after_space.text.len() >= 2
+                            && (after_space.text.chars().all(|c| c.is_ascii_alphabetic())
+                                || is_tech_token(&after_space.text));
+                        if is_eng {
+                            english_run.push((j, after_space));
+                            j += 1;
+                            continue;
+                        }
+                    }
+                }
+                break;
+            }
+
+            let mut matched = false;
+            for len in (1..=english_run.len()).rev() {
+                let subset: Vec<&str> = english_run[..len]
+                    .iter()
+                    .map(|(_, t)| t.text.as_str())
+                    .collect();
+
+                let first_idx = english_run[0].0;
+                let last_idx = english_run[len - 1].0;
+                let first_token = &tokens[first_idx];
+                let last_token = &tokens[last_idx];
+
+                if Self::overlaps_applied(first_token.start, last_token.end, applied) {
+                    continue;
+                }
+
+                if let Some(candidate) = Self::build_phonetic_candidate(
+                    matcher,
+                    &subset,
+                    text,
+                    first_token.start,
+                    last_token.end,
+                    candidate_index,
+                    TnlCandidateDecision::PendingLlm,
+                    TnlCandidateRisk::Medium,
+                    PENDING_LLM_MIN_SCORE,
+                    LOCAL_APPLY_SCORE_CEILING,
+                ) {
+                    candidates.push(candidate);
+                    candidate_index += 1;
+                    i = last_idx + 1;
+                    matched = true;
+                    break;
+                }
+
+                if let Some(candidate) = Self::build_phonetic_candidate(
+                    matcher,
+                    &subset,
+                    text,
+                    first_token.start,
+                    last_token.end,
+                    candidate_index,
+                    TnlCandidateDecision::RejectedLocal,
+                    TnlCandidateRisk::High,
+                    REJECTED_LOCAL_MIN_SCORE,
+                    PENDING_LLM_MIN_SCORE,
+                ) {
+                    candidates.push(candidate);
+                    candidate_index += 1;
+                    i = last_idx + 1;
+                    matched = true;
+                    break;
+                }
+            }
+
+            if !matched {
+                i += 1;
+            }
+        }
+
+        candidates
+    }
+
+    fn build_phonetic_candidate(
+        matcher: &FuzzyMatcher,
+        subset: &[&str],
+        text: &str,
+        start: usize,
+        end: usize,
+        index: usize,
+        decision: TnlCandidateDecision,
+        risk: TnlCandidateRisk,
+        min_score: f32,
+        max_score_exclusive: f32,
+    ) -> Option<TnlCandidate> {
+        let fuzzy_match =
+            matcher.try_phonetic_candidate_tokens(subset, min_score, max_score_exclusive)?;
+        let original = text[start..end].to_string();
+        if original.eq_ignore_ascii_case(&fuzzy_match.word) {
+            return None;
+        }
+
+        Some(TnlCandidate {
+            id: format!("candidate-{}-{}-{}", start, end, index),
+            original,
+            target: fuzzy_match.word,
+            start,
+            end,
+            score: fuzzy_match.confidence,
+            risk,
+            source: TnlCandidateSource::DictionaryPhonetic,
+            evidence: vec![
+                "phonetic_match".to_string(),
+                format!("score={:.2}", fuzzy_match.confidence),
+            ],
+            decision,
+        })
+    }
+
+    fn overlaps_applied(start: usize, end: usize, applied: &[Replacement]) -> bool {
+        applied
+            .iter()
+            .any(|r| start < r.end && end > r.start && r.original != r.replaced)
     }
 
     /// 从词库构建连字符重写规则
@@ -1365,6 +1543,52 @@ mod tests {
             !result.text.contains("Windsurf"),
             "BUG: 'Windows' was replaced with 'Windsurf' in: {}",
             result.text
+        );
+    }
+
+    #[test]
+    fn test_diagnostics_records_local_phonetic_replacement() {
+        let engine = TnlEngine::new(vec!["Claude Code".to_string()]);
+        let result = engine.normalize("打开 Cloud Code");
+
+        assert_eq!(result.text, "打开 Claude Code");
+        let diagnostics = result.diagnostics.expect("应生成 TNL 诊断");
+        let candidate = diagnostics
+            .candidates
+            .iter()
+            .find(|c| c.original == "Cloud Code")
+            .expect("应记录本地热词修正");
+
+        assert_eq!(candidate.target, "Claude Code");
+        assert_eq!(
+            candidate.decision,
+            crate::tnl::TnlCandidateDecision::AppliedLocal
+        );
+        assert_eq!(
+            candidate.source,
+            crate::tnl::TnlCandidateSource::DictionaryPhonetic
+        );
+    }
+
+    #[test]
+    fn test_diagnostics_collects_pending_llm_candidate_without_replacing() {
+        let engine = TnlEngine::new(vec!["Their".to_string()]);
+        let result = engine.normalize("open there");
+
+        assert_eq!(result.text, "open there");
+        let diagnostics = result.diagnostics.expect("应生成候选诊断");
+        let candidate = diagnostics
+            .candidates
+            .iter()
+            .find(|c| c.target == "Their")
+            .expect("应召回中置信候选");
+
+        assert_eq!(candidate.original, "there");
+        assert_eq!(
+            candidate.decision,
+            crate::tnl::TnlCandidateDecision::PendingLlm,
+            "score={}",
+            candidate.score
         );
     }
 }

@@ -2,6 +2,7 @@ import type { MouseEvent } from "react";
 import { MessageSquare, Clock, Copy, History, Mic, Sparkles, X, Quote } from "lucide-react";
 import type { HistoryRecord } from "../../types";
 import { formatTimestamp } from "../../utils";
+import { TnlDiagnosticsBadge, TnlDiagnosticsSummary } from "./TnlDiagnosticsSummary";
 
 export type HistoryDrawerProps = {
   open: boolean;
@@ -76,6 +77,7 @@ export function HistoryDrawer({
                   </span>
                   {record.success ? (
                     <div className="flex items-center gap-2">
+                      <TnlDiagnosticsBadge diagnostics={record.tnlDiagnostics} />
                       {record.mode === "assistant" ? (
                         <span className="text-[10px] bg-[rgba(217,119,87,0.12)] text-[var(--crail)] px-1.5 py-0.5 rounded">
                           AI 助手
@@ -211,6 +213,8 @@ export function HistoryDrawer({
                 ) : (
                   <p className="text-sm text-red-600 line-clamp-2">{record.errorMessage}</p>
                 )}
+
+                {record.success && <TnlDiagnosticsSummary diagnostics={record.tnlDiagnostics} />}
               </div>
             ))
           )}

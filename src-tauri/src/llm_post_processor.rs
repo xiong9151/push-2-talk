@@ -6,12 +6,17 @@
 // 支持多预设管理，用户可自定义润色风格
 
 use anyhow::Result;
-use std::collections::HashSet;
+use serde::Deserialize;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+use std::time::Instant;
 
 use crate::config::LlmConfig;
 use crate::dictionary_utils::entries_to_words;
 use crate::openai_client::{ChatOptions, OpenAiClient, OpenAiClientConfig};
+use crate::tnl::{
+    TnlCandidate, TnlCandidateArbitrationResult, TnlCandidateDecision, TnlDiagnostics,
+};
 
 /// LLM 文本润色处理器
 ///
@@ -27,6 +32,8 @@ pub struct LlmPostProcessor {
 impl LlmPostProcessor {
     const MAX_DICTIONARY_ENTRIES: usize = 200;
     const MAX_DICTIONARY_CHARS: usize = 4000;
+    const MAX_ARBITRATION_CANDIDATES: usize = 5;
+    const MAX_ARBITRATION_CONTEXT_CHARS: usize = 240;
     /// 词库增强追加指令（当语句润色和词库增强同时开启时追加到用户预设后）
     const DICTIONARY_ENHANCEMENT_SUFFIX: &'static str = "
 
@@ -191,6 +198,254 @@ impl LlmPostProcessor {
         message
     }
 
+    fn build_candidate_arbitration_user_message(text: &str, candidates: &[TnlCandidate]) -> String {
+        let compact_candidates: Vec<_> = candidates
+            .iter()
+            .take(Self::MAX_ARBITRATION_CANDIDATES)
+            .map(|candidate| {
+                serde_json::json!({
+                    "id": candidate.id,
+                    "original": candidate.original,
+                    "target": candidate.target,
+                    "score": candidate.score,
+                    "context": Self::candidate_context(text, candidate.start, candidate.end),
+                    "evidence": candidate.evidence,
+                })
+            })
+            .collect();
+
+        format!(
+            "<candidates>\n{}\n</candidates>\n\n每个 context 是候选附近的短上下文。只返回 JSON：{{\"decisions\":[{{\"id\":\"候选ID\",\"action\":\"apply|reject\",\"reason\":\"简短原因\"}}]}}。",
+            serde_json::to_string(&compact_candidates).unwrap_or_else(|_| "[]".to_string())
+        )
+    }
+
+    fn candidate_context(text: &str, start: usize, end: usize) -> String {
+        if text.chars().count() <= Self::MAX_ARBITRATION_CONTEXT_CHARS {
+            return text.to_string();
+        }
+
+        let safe_start = Self::floor_char_boundary(text, start.min(text.len()));
+        let safe_end = Self::ceil_char_boundary(text, end.min(text.len()));
+        let chars: Vec<char> = text.chars().collect();
+        let total_chars = chars.len();
+        let start_char = text[..safe_start].chars().count();
+        let end_char = text[..safe_end].chars().count().max(start_char);
+        let candidate_chars = end_char.saturating_sub(start_char);
+        let radius =
+            (Self::MAX_ARBITRATION_CONTEXT_CHARS.saturating_sub(candidate_chars) / 2).max(16);
+        let left = start_char.saturating_sub(radius);
+        let right = (end_char + radius).min(total_chars);
+
+        let mut snippet: String = chars[left..right].iter().collect();
+        if left > 0 {
+            snippet.insert_str(0, "...");
+        }
+        if right < total_chars {
+            snippet.push_str("...");
+        }
+        snippet
+    }
+
+    fn floor_char_boundary(text: &str, mut index: usize) -> usize {
+        index = index.min(text.len());
+        while index > 0 && !text.is_char_boundary(index) {
+            index -= 1;
+        }
+        index
+    }
+
+    fn ceil_char_boundary(text: &str, mut index: usize) -> usize {
+        index = index.min(text.len());
+        while index < text.len() && !text.is_char_boundary(index) {
+            index += 1;
+        }
+        index
+    }
+
+    fn candidate_arbitration_system_prompt() -> &'static str {
+        "你是 ASR 热词候选仲裁器。只能判断给定候选是否应替换，不能自由改写全文。\
+        当候选在语音相似且语境更合理时 action=apply；不确定、语境一般或可能误伤常见词时 action=reject。\
+        必须返回严格 JSON，不要输出解释文本。"
+    }
+
+    /// 对 TNL 中置信候选执行轻量 LLM 仲裁。
+    pub async fn arbitrate_tnl_candidates(
+        &self,
+        text: &str,
+        mut diagnostics: TnlDiagnostics,
+    ) -> Result<TnlCandidateArbitrationResult> {
+        let pending_candidates = Self::prepare_candidate_arbitration_candidates(&mut diagnostics);
+
+        if pending_candidates.is_empty() {
+            return Ok(TnlCandidateArbitrationResult {
+                text: text.to_string(),
+                diagnostics,
+                elapsed_ms: 0,
+            });
+        }
+
+        let user_message =
+            Self::build_candidate_arbitration_user_message(text, &pending_candidates);
+        let start = Instant::now();
+        let response = self
+            .client
+            .chat_simple(
+                Self::candidate_arbitration_system_prompt(),
+                &user_message,
+                ChatOptions::for_candidate_arbitration(),
+            )
+            .await?;
+        let elapsed_ms = start.elapsed().as_millis() as u64;
+
+        Self::apply_candidate_arbitration_response(text, diagnostics, &response, elapsed_ms)
+    }
+
+    fn prepare_candidate_arbitration_candidates(
+        diagnostics: &mut TnlDiagnostics,
+    ) -> Vec<TnlCandidate> {
+        let mut pending_candidates = Vec::new();
+
+        for candidate in &mut diagnostics.candidates {
+            if candidate.decision != TnlCandidateDecision::PendingLlm {
+                continue;
+            }
+
+            if pending_candidates.len() < Self::MAX_ARBITRATION_CANDIDATES {
+                pending_candidates.push(candidate.clone());
+            } else {
+                candidate.decision = TnlCandidateDecision::SkippedLimit;
+                candidate
+                    .evidence
+                    .push("arbitration_candidate_limit".to_string());
+            }
+        }
+
+        pending_candidates
+    }
+
+    fn apply_candidate_arbitration_response(
+        text: &str,
+        mut diagnostics: TnlDiagnostics,
+        response: &str,
+        elapsed_ms: u64,
+    ) -> Result<TnlCandidateArbitrationResult> {
+        #[derive(Debug, Deserialize)]
+        struct DecisionItem {
+            id: String,
+            action: String,
+            reason: Option<String>,
+        }
+
+        #[derive(Debug, Deserialize)]
+        struct DecisionPayload {
+            decisions: Vec<DecisionItem>,
+        }
+
+        let json = Self::extract_json_object(response)?;
+        let payload: DecisionPayload = serde_json::from_str(json)?;
+        let decisions: HashMap<String, DecisionItem> = payload
+            .decisions
+            .into_iter()
+            .map(|decision| (decision.id.clone(), decision))
+            .collect();
+
+        let pending_indices: Vec<usize> = diagnostics
+            .candidates
+            .iter()
+            .enumerate()
+            .filter_map(|(idx, candidate)| {
+                (candidate.decision == TnlCandidateDecision::PendingLlm).then_some(idx)
+            })
+            .collect();
+        let skipped_count = diagnostics
+            .candidates
+            .iter()
+            .filter(|candidate| candidate.decision == TnlCandidateDecision::SkippedLimit)
+            .count();
+
+        let mut accepted: Vec<TnlCandidate> = Vec::new();
+        let mut applied_count = 0usize;
+        let mut rejected_count = 0usize;
+
+        for idx in pending_indices {
+            let candidate = &mut diagnostics.candidates[idx];
+            let Some(decision) = decisions.get(&candidate.id) else {
+                candidate.decision = TnlCandidateDecision::RejectedLlm;
+                candidate.evidence.push("llm_missing_decision".to_string());
+                rejected_count += 1;
+                continue;
+            };
+
+            let reason = decision
+                .reason
+                .clone()
+                .unwrap_or_else(|| "llm_arbitration".to_string());
+            let action = decision.action.trim().to_ascii_lowercase();
+
+            if action == "apply" || action == "replace" {
+                candidate.decision = TnlCandidateDecision::AppliedLlm;
+                candidate.evidence.push(reason);
+                accepted.push(candidate.clone());
+                applied_count += 1;
+            } else {
+                candidate.decision = TnlCandidateDecision::RejectedLlm;
+                candidate.evidence.push(reason);
+                rejected_count += 1;
+            }
+        }
+
+        accepted.sort_by(|a, b| b.start.cmp(&a.start));
+        let mut output = text.to_string();
+        for candidate in &accepted {
+            if candidate.start <= candidate.end && candidate.end <= output.len() {
+                output.replace_range(candidate.start..candidate.end, &candidate.target);
+            }
+        }
+
+        diagnostics.arbitration = Some(crate::tnl::TnlArbitrationSummary {
+            attempted: true,
+            candidate_count: applied_count + rejected_count,
+            applied_count,
+            rejected_count,
+            skipped_count,
+            elapsed_ms: Some(elapsed_ms),
+            reason: None,
+        });
+
+        Ok(TnlCandidateArbitrationResult {
+            text: output,
+            diagnostics,
+            elapsed_ms,
+        })
+    }
+
+    fn extract_json_object(response: &str) -> Result<&str> {
+        let trimmed = response.trim();
+        let without_fence = trimmed
+            .strip_prefix("```json")
+            .or_else(|| trimmed.strip_prefix("```"))
+            .map(|s| s.trim())
+            .unwrap_or(trimmed);
+        let without_fence = without_fence
+            .strip_suffix("```")
+            .map(|s| s.trim())
+            .unwrap_or(without_fence);
+
+        let start = without_fence
+            .find('{')
+            .ok_or_else(|| anyhow::anyhow!("候选仲裁响应缺少 JSON 对象"))?;
+        let end = without_fence
+            .rfind('}')
+            .ok_or_else(|| anyhow::anyhow!("候选仲裁响应缺少 JSON 对象结束符"))?;
+
+        if start > end {
+            anyhow::bail!("候选仲裁响应 JSON 范围无效");
+        }
+
+        Ok(&without_fence[start..=end])
+    }
+
     /// 文本润色
     ///
     /// 使用当前激活的预设对 ASR 转写文本进行润色
@@ -311,5 +566,133 @@ mod tests {
         let dict = vec!["张三".to_string()];
         let msg = LlmPostProcessor::build_user_message("你好", &dict, false);
         assert!(!msg.contains("<user_dictionary>"));
+    }
+
+    fn pending_candidate(
+        id: String,
+        original: &str,
+        target: &str,
+        start: usize,
+        end: usize,
+    ) -> crate::tnl::TnlCandidate {
+        crate::tnl::TnlCandidate {
+            id,
+            original: original.to_string(),
+            target: target.to_string(),
+            start,
+            end,
+            score: 0.72,
+            risk: crate::tnl::TnlCandidateRisk::Medium,
+            source: crate::tnl::TnlCandidateSource::DictionaryPhonetic,
+            evidence: vec!["test".to_string()],
+            decision: crate::tnl::TnlCandidateDecision::PendingLlm,
+        }
+    }
+
+    #[test]
+    fn test_apply_candidate_arbitration_response_updates_text_and_diagnostics() {
+        let diagnostics = crate::tnl::TnlDiagnostics {
+            candidates: vec![pending_candidate(
+                "candidate-4-11-0".to_string(),
+                "Cruiser",
+                "Cursor",
+                4,
+                11,
+            )],
+            arbitration: None,
+        };
+
+        let result = LlmPostProcessor::apply_candidate_arbitration_response(
+            "用 Cruiser 打开",
+            diagnostics,
+            r#"{"decisions":[{"id":"candidate-4-11-0","action":"apply","reason":"技术上下文明确"}]}"#,
+            42,
+        )
+        .expect("仲裁 JSON 应可解析");
+
+        assert_eq!(result.text, "用 Cursor 打开");
+        assert_eq!(result.elapsed_ms, 42);
+        assert_eq!(
+            result.diagnostics.candidates[0].decision,
+            crate::tnl::TnlCandidateDecision::AppliedLlm
+        );
+        assert_eq!(result.diagnostics.arbitration.unwrap().applied_count, 1);
+    }
+
+    #[test]
+    fn test_apply_candidate_arbitration_response_rejects_missing_decision() {
+        let diagnostics = crate::tnl::TnlDiagnostics {
+            candidates: vec![pending_candidate(
+                "candidate-0-7-0".to_string(),
+                "Cruiser",
+                "Cursor",
+                0,
+                7,
+            )],
+            arbitration: None,
+        };
+
+        let result = LlmPostProcessor::apply_candidate_arbitration_response(
+            "Cruiser",
+            diagnostics,
+            r#"{"decisions":[]}"#,
+            12,
+        )
+        .expect("空决策列表也应保守处理");
+
+        assert_eq!(result.text, "Cruiser");
+        assert_eq!(
+            result.diagnostics.candidates[0].decision,
+            crate::tnl::TnlCandidateDecision::RejectedLlm
+        );
+    }
+
+    #[test]
+    fn test_prepare_candidate_arbitration_candidates_respects_limit() {
+        let mut diagnostics = crate::tnl::TnlDiagnostics {
+            candidates: (0..7)
+                .map(|idx| {
+                    pending_candidate(
+                        format!("candidate-{}-{}", idx, idx + 1),
+                        "Cruiser",
+                        "Cursor",
+                        idx,
+                        idx + 1,
+                    )
+                })
+                .collect(),
+            arbitration: None,
+        };
+
+        let selected = LlmPostProcessor::prepare_candidate_arbitration_candidates(&mut diagnostics);
+
+        assert_eq!(selected.len(), LlmPostProcessor::MAX_ARBITRATION_CANDIDATES);
+        assert_eq!(
+            diagnostics.candidates[5].decision,
+            crate::tnl::TnlCandidateDecision::SkippedLimit
+        );
+        assert_eq!(
+            diagnostics.candidates[6].decision,
+            crate::tnl::TnlCandidateDecision::SkippedLimit
+        );
+    }
+
+    #[test]
+    fn test_candidate_arbitration_message_uses_bounded_context() {
+        let text = format!("{}Cruiser{}", "a".repeat(500), "b".repeat(500));
+        let candidate = pending_candidate(
+            "candidate-500-507-0".to_string(),
+            "Cruiser",
+            "Cursor",
+            500,
+            507,
+        );
+
+        let msg = LlmPostProcessor::build_candidate_arbitration_user_message(&text, &[candidate]);
+
+        assert!(msg.contains("\"context\""));
+        assert!(msg.contains("Cruiser"));
+        assert!(!msg.contains(&"a".repeat(300)));
+        assert!(!msg.contains(&"b".repeat(300)));
     }
 }

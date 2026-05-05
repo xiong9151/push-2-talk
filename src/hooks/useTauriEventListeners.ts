@@ -215,6 +215,7 @@ export function useTauriEventListeners({
             totalTimeMs: result.total_time_ms,
             success: true,
             errorMessage: null,
+            tnlDiagnostics: result.tnl_diagnostics,
           });
         }))) return;
 

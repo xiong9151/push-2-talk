@@ -22,34 +22,273 @@ const COMMON_WORD_EDIT_SIM_FLOOR_BOOST: f32 = 0.05;
 
 /// 高频英文词保护集（可按实际误替换样本持续扩充）
 const COMMON_ENGLISH_WORDS: &[&str] = &[
-    "a", "about", "after", "all", "also", "an", "and", "any", "are", "as", "at", "back", "be",
-    "been", "before", "but", "by", "can", "change", "check", "class", "close", "code", "come",
-    "control", "copy", "could", "data", "day", "delete", "did", "do", "docker", "down", "error",
-    "even", "false", "file", "find", "first", "for", "from", "function", "get", "go", "good",
-    "great", "group", "had", "has", "have", "he", "help", "her", "here", "him", "his", "home",
-    "how", "i", "if", "image", "in", "input", "into", "is", "it", "its", "just", "key", "know",
-    "last", "left", "like", "line", "linux", "list", "load", "local", "log", "long", "look",
-    "main", "make", "man", "many", "map", "match", "me", "mode", "model", "more", "most",
-    "move", "my", "name", "new", "next", "no", "node", "not", "now", "null", "number", "object",
-    "of", "on", "one", "only", "open", "or", "order", "other", "our", "out", "output", "over",
-    "page", "pass", "path", "people", "point", "port", "press", "print", "process", "program",
-    "project", "push", "query", "queue", "range", "read", "remote", "result", "return", "right",
-    "root", "rule", "run", "save", "say", "search", "see", "server", "service", "she", "shell",
-    "show", "size", "so", "some", "sort", "source", "space", "start", "state", "stop", "store",
-    "string", "style", "system", "table", "take", "target", "task", "test", "text", "than",
-    "that", "the", "their", "them", "then", "there", "these", "they", "thing", "think", "this",
-    "thread", "time", "to", "token", "tool", "top", "true", "two", "type", "up", "update",
-    "use", "user", "value", "version", "very", "view", "want", "was", "watch", "way", "we",
-    "well", "what", "when", "which", "who", "will", "windows", "with", "word", "work", "would",
-    "write", "year", "you", "your","yes", "yeah", "okay", "ok", "alright",
-    "because", "why", "where", "through", "much", "too",
-    "same", "another", "something", "nothing", "both", "few", "those",
-    "must", "should", "might", "does",
-    "still", "never", "always", "again", "off", "away",
-    "old", "small", "big", "large", "little",
-    "every", "us", "while", "need", "let", "try", "sure",
-    "said", "were", "each", "going", "really",
-    "hello", "hi", "thanks", "please", "sorry"
+    "a",
+    "about",
+    "after",
+    "all",
+    "also",
+    "an",
+    "and",
+    "any",
+    "are",
+    "as",
+    "at",
+    "back",
+    "be",
+    "been",
+    "before",
+    "but",
+    "by",
+    "can",
+    "change",
+    "check",
+    "class",
+    "close",
+    "code",
+    "come",
+    "control",
+    "copy",
+    "could",
+    "data",
+    "day",
+    "delete",
+    "did",
+    "do",
+    "docker",
+    "down",
+    "error",
+    "even",
+    "false",
+    "file",
+    "find",
+    "first",
+    "for",
+    "from",
+    "function",
+    "get",
+    "go",
+    "good",
+    "great",
+    "group",
+    "had",
+    "has",
+    "have",
+    "he",
+    "help",
+    "her",
+    "here",
+    "him",
+    "his",
+    "home",
+    "how",
+    "i",
+    "if",
+    "image",
+    "in",
+    "input",
+    "into",
+    "is",
+    "it",
+    "its",
+    "just",
+    "key",
+    "know",
+    "last",
+    "left",
+    "like",
+    "line",
+    "linux",
+    "list",
+    "load",
+    "local",
+    "log",
+    "long",
+    "look",
+    "main",
+    "make",
+    "man",
+    "many",
+    "map",
+    "match",
+    "me",
+    "mode",
+    "model",
+    "more",
+    "most",
+    "move",
+    "my",
+    "name",
+    "new",
+    "next",
+    "no",
+    "node",
+    "not",
+    "now",
+    "null",
+    "number",
+    "object",
+    "of",
+    "on",
+    "one",
+    "only",
+    "open",
+    "or",
+    "order",
+    "other",
+    "our",
+    "out",
+    "output",
+    "over",
+    "page",
+    "pass",
+    "path",
+    "people",
+    "point",
+    "port",
+    "press",
+    "print",
+    "process",
+    "program",
+    "project",
+    "push",
+    "query",
+    "queue",
+    "range",
+    "read",
+    "remote",
+    "result",
+    "return",
+    "right",
+    "root",
+    "rule",
+    "run",
+    "save",
+    "say",
+    "search",
+    "see",
+    "server",
+    "service",
+    "she",
+    "shell",
+    "show",
+    "size",
+    "so",
+    "some",
+    "sort",
+    "source",
+    "space",
+    "start",
+    "state",
+    "stop",
+    "store",
+    "string",
+    "style",
+    "system",
+    "table",
+    "take",
+    "target",
+    "task",
+    "test",
+    "text",
+    "than",
+    "that",
+    "the",
+    "their",
+    "them",
+    "then",
+    "there",
+    "these",
+    "they",
+    "thing",
+    "think",
+    "this",
+    "thread",
+    "time",
+    "to",
+    "token",
+    "tool",
+    "top",
+    "true",
+    "two",
+    "type",
+    "up",
+    "update",
+    "use",
+    "user",
+    "value",
+    "version",
+    "very",
+    "view",
+    "want",
+    "was",
+    "watch",
+    "way",
+    "we",
+    "well",
+    "what",
+    "when",
+    "which",
+    "who",
+    "will",
+    "windows",
+    "with",
+    "word",
+    "work",
+    "would",
+    "write",
+    "year",
+    "you",
+    "your",
+    "yes",
+    "yeah",
+    "okay",
+    "ok",
+    "alright",
+    "because",
+    "why",
+    "where",
+    "through",
+    "much",
+    "too",
+    "same",
+    "another",
+    "something",
+    "nothing",
+    "both",
+    "few",
+    "those",
+    "must",
+    "should",
+    "might",
+    "does",
+    "still",
+    "never",
+    "always",
+    "again",
+    "off",
+    "away",
+    "old",
+    "small",
+    "big",
+    "large",
+    "little",
+    "every",
+    "us",
+    "while",
+    "need",
+    "let",
+    "try",
+    "sure",
+    "said",
+    "were",
+    "each",
+    "going",
+    "really",
+    "hello",
+    "hi",
+    "thanks",
+    "please",
+    "sorry",
 ];
 
 /// 根据输入词长度计算动态置信度阈值
@@ -593,6 +832,120 @@ impl FuzzyMatcher {
 
         if let Some((idx, score)) = top1 {
             if score < min_confidence {
+                return None;
+            }
+
+            if let Some(s2) = top2_score {
+                if score - s2 < MARGIN_THRESHOLD {
+                    return None;
+                }
+            }
+
+            return Some(FuzzyMatch {
+                word: self.dictionary[idx].clone(),
+                confidence: score,
+                match_type: FuzzyMatchType::Phonetic,
+            });
+        }
+
+        None
+    }
+
+    /// 尝试召回指定分数区间内的音近候选，用于 TNL 候选仲裁诊断。
+    ///
+    /// 不改变现有 `try_phonetic_match_tokens` 的自动替换阈值；这里只返回调用方
+    /// 明确请求的分数区间，便于把中置信候选交给 LLM 仲裁。
+    pub fn try_phonetic_candidate_tokens(
+        &self,
+        tokens: &[&str],
+        min_score: f32,
+        max_score_exclusive: f32,
+    ) -> Option<FuzzyMatch> {
+        if tokens.is_empty() || self.phonetic_index.is_empty() {
+            return None;
+        }
+
+        let valid_tokens: Vec<&str> = tokens
+            .iter()
+            .filter(|t| {
+                (t.len() >= 2 && t.chars().all(|c| c.is_ascii_alphabetic())) || is_tech_token(t)
+            })
+            .copied()
+            .collect();
+
+        if valid_tokens.is_empty() {
+            return None;
+        }
+
+        let primary_key = Self::compute_query_key(&self.dm_encoder, &valid_tokens, false);
+        let alternate_key = Self::compute_query_key(&self.dm_encoder, &valid_tokens, true);
+
+        let mut candidate_indices: Vec<usize> = Vec::new();
+        let mut seen: HashSet<usize> = HashSet::new();
+
+        for key in [primary_key.as_str(), alternate_key.as_str()] {
+            if key.is_empty() {
+                continue;
+            }
+            if let Some(indices) = self.phonetic_index.get(key) {
+                for &idx in indices {
+                    if seen.insert(idx) {
+                        candidate_indices.push(idx);
+                    }
+                }
+            }
+        }
+
+        if candidate_indices.is_empty() {
+            return None;
+        }
+
+        let input = valid_tokens.join("");
+        let input_lower = input.to_lowercase();
+        let base_confidence = if candidate_indices.len() == 1 {
+            0.9
+        } else {
+            0.85
+        };
+        let edit_sim_floor =
+            (effective_edit_similarity_floor(&input, valid_tokens.len()) - 0.05).max(0.45);
+        let mut top1: Option<(usize, f32)> = None;
+        let mut top2_score: Option<f32> = None;
+
+        for &idx in &candidate_indices {
+            let word = &self.dictionary[idx];
+            if word.to_lowercase() == input_lower {
+                continue;
+            }
+
+            let edit_sim = Self::calculate_edit_similarity(&input, word);
+            if edit_sim < edit_sim_floor {
+                continue;
+            }
+
+            let score = Self::calculate_candidate_score(&input, word, base_confidence, edit_sim);
+            if score >= max_score_exclusive {
+                continue;
+            }
+
+            match top1 {
+                None => {
+                    top1 = Some((idx, score));
+                }
+                Some((_, s1)) if score > s1 => {
+                    top2_score = Some(s1);
+                    top1 = Some((idx, score));
+                }
+                Some((_, _)) => {
+                    if top2_score.map_or(true, |s2| score > s2) {
+                        top2_score = Some(score);
+                    }
+                }
+            }
+        }
+
+        if let Some((idx, score)) = top1 {
+            if score < min_score {
                 return None;
             }
 
@@ -1195,7 +1548,9 @@ mod tests {
 
     #[test]
     fn test_common_word_list_contains_more_technical_words() {
-        for word in ["docker", "linux", "token", "query", "false", "true", "server"] {
+        for word in [
+            "docker", "linux", "token", "query", "false", "true", "server",
+        ] {
             assert!(
                 is_common_english_word(word),
                 "expected '{}' in common word list",
@@ -1256,7 +1611,10 @@ mod tests {
 
         // margin suppression 应当生效
         let result = matcher.try_phonetic_match("cloud");
-        assert!(result.is_none(), "Margin suppression should reject ambiguous match");
+        assert!(
+            result.is_none(),
+            "Margin suppression should reject ambiguous match"
+        );
     }
 
     #[test]
