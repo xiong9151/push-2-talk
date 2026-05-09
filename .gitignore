@@ -57,5 +57,6 @@ docs/
 .worktrees/
 .gitnexus
 
-# Fusion metadata (local)
-.fusion/
+# Python bytecode (hook scripts under .claude/.codex/.cursor)
+__pycache__/
+*.pyc

@@ -57,6 +57,10 @@ export interface LlmPreset {
   id: string;
   name: string;
   system_prompt: string;
+  /** Per-preset provider override. When set, overrides polishing default chain. */
+  provider_id?: string;
+  /** Per-preset model override. Invariant: requires `provider_id` to be set. */
+  model?: string;
 }
 
 // LLM 提供商配置

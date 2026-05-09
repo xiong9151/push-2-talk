@@ -690,6 +690,16 @@ pub struct LlmPreset {
     pub id: String,
     pub name: String,
     pub system_prompt: String,
+    /// Per-preset provider override (optional).
+    /// When `Some`, this preset uses the given provider instead of the polishing default.
+    /// When `None`, falls back to feature-level / shared default chain.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provider_id: Option<String>,
+    /// Per-preset model override (optional).
+    /// Invariant: `model.is_some()` requires `provider_id.is_some()` (state ④ banned).
+    /// Migration 9 cleans up violations on load.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub model: Option<String>,
 }
 
 // ============================================================================
@@ -975,8 +985,64 @@ pub struct LlmConfig {
 }
 
 impl LlmConfig {
+    /// Migration 9 helper: cleanup preset state ④ violations
+    /// (`model.is_some() && provider_id.is_none()`).
+    ///
+    /// Returns `true` if any preset was cleaned (caller should set `migrated = true`).
+    /// Extracted as a public helper so it can be unit-tested directly without
+    /// going through `AppConfig::load` (which reads from disk).
+    pub fn cleanup_preset_state_invariant(&mut self) -> bool {
+        let mut cleaned = false;
+        for preset in self.presets.iter_mut() {
+            if preset.model.is_some() && preset.provider_id.is_none() {
+                tracing::warn!(
+                    "preset {} 违反不变量（model={:?} 但 provider_id=None），清理 model 字段",
+                    preset.id,
+                    preset.model
+                );
+                preset.model = None;
+                cleaned = true;
+            }
+        }
+        cleaned
+    }
+
     /// 解析语音润色配置
+    ///
+    /// Priority chain:
+    /// 1. Active preset's `provider_id` (if set and points to an existing provider) → preset.model
+    ///    or provider.default_model. **Skips `shared.polishing_model`** (avoids badge-vs-behavior mismatch).
+    /// 2. Preset.provider_id absent or dangling → fallthrough to original chain
+    ///    `feature_override.resolve_with_feature(&shared, "polishing")`.
+    ///
+    /// Note: `resolve_with_feature` is shared by polishing/assistant/learning, so preset awareness
+    /// is contained here in `LlmConfig` rather than leaking the preset concept to the generic method.
     pub fn resolve_polishing(&self) -> ResolvedLlmClientConfig {
+        if let Some(preset) = self
+            .presets
+            .iter()
+            .find(|p| p.id == self.active_preset_id)
+        {
+            if let Some(provider_id) = preset.provider_id.as_deref() {
+                if let Some(provider) = self.shared.get_provider(provider_id) {
+                    let model = preset
+                        .model
+                        .clone()
+                        .unwrap_or_else(|| provider.default_model.clone());
+                    return ResolvedLlmClientConfig {
+                        endpoint: normalize_chat_completions_endpoint(&provider.endpoint),
+                        api_key: provider.api_key.clone(),
+                        model,
+                    };
+                }
+                tracing::warn!(
+                    "preset {} 指向不存在的 provider {}，降级到默认链",
+                    preset.id,
+                    provider_id
+                );
+            }
+        }
+
         self.feature_override
             .resolve_with_feature(&self.shared, "polishing")
     }
@@ -1028,11 +1094,15 @@ fn default_presets() -> Vec<LlmPreset> {
             id: "polishing".to_string(),
             name: "文本润色".to_string(),
             system_prompt: "你是一个语音转写润色助手。请在不改变原意的前提下：1）删除重复或意义相近的句子；2）合并同一主题的内容；3）去除「嗯」「啊」等口头禅；4）保留数字与关键信息；5）相关数字和时间不要使用中文；6）整理成自然的段落。输出纯文本即可。".to_string(),
+            provider_id: None,
+            model: None,
         },
         LlmPreset {
             id: "translation".to_string(),
             name: "中译英".to_string(),
             system_prompt: "你是一个专业的翻译助手。请将用户的中文语音转写内容翻译成地道、流畅的英文。不要输出任何解释性文字，只输出翻译结果。".to_string(),
+            provider_id: None,
+            model: None,
         }
     ]
 }
@@ -1698,6 +1768,13 @@ impl AppConfig {
                 }
             }
 
+            // 迁移 9: 清理 LlmPreset state ④（model.is_some() 且 provider_id.is_none()）
+            // 该状态违反不变量：preset.model 必须依附于 preset.provider_id
+            // 仅在手工编辑 config.json 后可能出现；前端 popover 守护正常路径不会产生
+            if config.llm_config.cleanup_preset_state_invariant() {
+                migrated = true;
+            }
+
             if config.llm_config.presets.is_empty() {
                 tracing::info!("检测到预设列表为空，用户可能删除了所有预设");
             }
@@ -1775,10 +1852,148 @@ impl AppConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::{AsrConfig, AsrLanguageMode};
+    use super::{AsrConfig, AsrLanguageMode, LlmConfig, LlmPreset};
 
     #[test]
     fn asr_config_defaults_to_auto_language_mode() {
         assert_eq!(AsrConfig::default().language_mode, AsrLanguageMode::Auto);
+    }
+
+    // ============================================================================
+    // PRD per-preset-llm-override — T7-T10 (migration 9 + serde compat)
+    // ============================================================================
+
+    /// T7: Migration 9 cleans state ④ violation
+    /// (`model.is_some() && provider_id.is_none()` is invalid; cleanup zeroes `model`)
+    #[test]
+    fn test_load_migration_9_cleans_state_invariant_violation() {
+        let mut llm = LlmConfig::default();
+        llm.presets = vec![
+            LlmPreset {
+                id: "p1".to_string(),
+                name: "Valid".to_string(),
+                system_prompt: String::new(),
+                provider_id: Some("some-provider".to_string()),
+                model: Some("some-model".to_string()),
+            },
+            LlmPreset {
+                id: "p2".to_string(),
+                name: "Invariant Violation".to_string(),
+                system_prompt: String::new(),
+                provider_id: None, // ← violates invariant
+                model: Some("orphan-model".to_string()),
+            },
+            LlmPreset {
+                id: "p3".to_string(),
+                name: "Default".to_string(),
+                system_prompt: String::new(),
+                provider_id: None,
+                model: None,
+            },
+        ];
+
+        let cleaned = llm.cleanup_preset_state_invariant();
+        assert!(cleaned, "迁移 9 必须报告做了清理");
+
+        // p1: 不变（合法）
+        assert_eq!(llm.presets[0].provider_id.as_deref(), Some("some-provider"));
+        assert_eq!(llm.presets[0].model.as_deref(), Some("some-model"));
+        // p2: model 被清空
+        assert_eq!(llm.presets[1].provider_id, None);
+        assert_eq!(llm.presets[1].model, None, "state ④ 的 model 必须被清空");
+        // p3: 不变（默认态）
+        assert_eq!(llm.presets[2].provider_id, None);
+        assert_eq!(llm.presets[2].model, None);
+    }
+
+    /// T8: Migration 9 returns false (no migration) when all presets are valid
+    /// 用于验证 `migrated=true` 触发条件正确
+    #[test]
+    fn test_load_migration_9_skips_when_no_violation() {
+        let mut llm = LlmConfig::default();
+        llm.presets = vec![LlmPreset {
+            id: "p1".to_string(),
+            name: "Default".to_string(),
+            system_prompt: String::new(),
+            provider_id: None,
+            model: None,
+        }];
+
+        let cleaned = llm.cleanup_preset_state_invariant();
+        assert!(!cleaned, "无违反时不应触发清理（migrated=false 路径）");
+    }
+
+    /// T9: Legacy config (no provider_id/model fields) loads with all presets defaulted to None
+    #[test]
+    fn test_load_legacy_config_without_preset_fields_unchanged() {
+        // Inline JSON literal mimics an old config saved before this feature
+        let legacy_json = r#"{
+            "id": "polishing",
+            "name": "文本润色",
+            "system_prompt": "Old prompt"
+        }"#;
+
+        let preset: LlmPreset = serde_json::from_str(legacy_json)
+            .expect("旧 JSON 必须能反序列化");
+
+        assert_eq!(preset.id, "polishing");
+        assert_eq!(preset.name, "文本润色");
+        assert_eq!(preset.system_prompt, "Old prompt");
+        assert_eq!(preset.provider_id, None, "旧 JSON 加载后 provider_id 必须为 None");
+        assert_eq!(preset.model, None, "旧 JSON 加载后 model 必须为 None");
+    }
+
+    /// T10: Serializing a preset with None fields skips them entirely
+    /// (skip_serializing_if 生效 → 与旧版 JSON 字节级兼容)
+    #[test]
+    fn test_save_preset_skips_serializing_none_fields() {
+        let preset = LlmPreset {
+            id: "p1".to_string(),
+            name: "Test".to_string(),
+            system_prompt: "prompt".to_string(),
+            provider_id: None,
+            model: None,
+        };
+
+        let json = serde_json::to_string(&preset).expect("序列化必须成功");
+
+        assert!(
+            !json.contains("provider_id"),
+            "None 时 provider_id 不应出现在 JSON 中: {}",
+            json
+        );
+        assert!(
+            !json.contains("\"model\""),
+            "None 时 model 不应出现在 JSON 中: {}",
+            json
+        );
+        // 正向：必有字段都在
+        assert!(json.contains("\"id\":\"p1\""));
+        assert!(json.contains("\"name\":\"Test\""));
+    }
+
+    /// 补充 T10b: 有覆盖时序列化必须包含字段
+    #[test]
+    fn test_save_preset_with_override_serializes_fields() {
+        let preset = LlmPreset {
+            id: "p1".to_string(),
+            name: "Test".to_string(),
+            system_prompt: "prompt".to_string(),
+            provider_id: Some("prov-1".to_string()),
+            model: Some("m1".to_string()),
+        };
+
+        let json = serde_json::to_string(&preset).expect("序列化必须成功");
+
+        assert!(
+            json.contains("\"provider_id\":\"prov-1\""),
+            "Some 时 provider_id 必须出现: {}",
+            json
+        );
+        assert!(
+            json.contains("\"model\":\"m1\""),
+            "Some 时 model 必须出现: {}",
+            json
+        );
     }
 }

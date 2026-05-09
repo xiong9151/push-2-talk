@@ -640,14 +640,21 @@ impl TnlEngine {
                         .map(|(_, t)| t.text.as_str())
                         .collect();
 
+                    let first_idx = english_run[0].0;
+                    let last_idx = english_run[len - 1].0;
+                    let first_token = &tokens[first_idx];
+                    let last_token = &tokens[last_idx];
+                    let original = &text[first_token.start..last_token.end];
+
+                    if matcher.has_exact_dictionary_match(original) {
+                        result.push_str(original);
+                        i = last_idx + 1;
+                        matched = true;
+                        break;
+                    }
+
                     if let Some(fuzzy_match) = matcher.try_phonetic_match_tokens(&subset) {
                         // 匹配成功
-                        let first_idx = english_run[0].0;
-                        let last_idx = english_run[len - 1].0;
-                        let first_token = &tokens[first_idx];
-                        let last_token = &tokens[last_idx];
-                        let original = &text[first_token.start..last_token.end];
-
                         result.push_str(&fuzzy_match.word);
                         replacements.push(Replacement {
                             original: original.to_string(),
@@ -745,6 +752,13 @@ impl TnlEngine {
 
                 if Self::overlaps_applied(first_token.start, last_token.end, applied) {
                     continue;
+                }
+
+                let original = &text[first_token.start..last_token.end];
+                if matcher.has_exact_dictionary_match(original) {
+                    i = last_idx + 1;
+                    matched = true;
+                    break;
                 }
 
                 if let Some(candidate) = Self::build_phonetic_candidate(
@@ -1568,6 +1582,39 @@ mod tests {
             candidate.source,
             crate::tnl::TnlCandidateSource::DictionaryPhonetic
         );
+    }
+
+    #[test]
+    fn test_phonetic_preserves_exact_dictionary_word_when_nearby_word_exists() {
+        let engine = TnlEngine::new(vec![
+            "Grok".to_string(),
+            "Groq".to_string(),
+            "Claude".to_string(),
+        ]);
+        let input = "就像 Grok 以及 Claude 相关的内容";
+
+        let result = engine.normalize(input);
+
+        assert_eq!(result.text, input);
+        assert!(
+            !result.applied.iter().any(|replacement| {
+                replacement.original == "Grok"
+                    && replacement.replaced == "Groq"
+                    && matches!(replacement.reason, ReplacementReason::DictionaryPhonetic)
+            }),
+            "Grok 不应被本地音近替换为 Groq: {:?}",
+            result.applied
+        );
+
+        if let Some(diagnostics) = result.diagnostics {
+            assert!(
+                !diagnostics.candidates.iter().any(|candidate| {
+                    candidate.original == "Grok" && candidate.target == "Groq"
+                }),
+                "精确词库命中的 Grok 不应产生 Groq 音近候选: {:?}",
+                diagnostics.candidates
+            );
+        }
     }
 
     #[test]

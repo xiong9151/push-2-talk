@@ -508,6 +508,14 @@ impl FuzzyMatcher {
         }
     }
 
+    /// 判断文本是否已经大小写不敏感地精确命中词库。
+    pub fn has_exact_dictionary_match(&self, text: &str) -> bool {
+        let text_lower = text.to_lowercase();
+        self.dictionary
+            .iter()
+            .any(|word| word.to_lowercase() == text_lower)
+    }
+
     /// 拆分复合词为多个部分
     ///
     /// 支持：

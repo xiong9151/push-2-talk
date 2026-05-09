@@ -1,13 +1,27 @@
-import { useState } from "react";
-import { Plus, Trash2, Edit2, Settings2, Globe, Check, Zap, Sparkles, MessageSquare, GraduationCap, PlugZap, ShieldCheck, CircleX, Clock, BookOpen } from "lucide-react";
+import { useMemo, useState } from "react";
+import { Plus, Trash2, Edit2, Settings2, Globe, Check, Zap, Sparkles, MessageSquare, GraduationCap, PlugZap, ShieldCheck, CircleX, Clock, BookOpen, Target, ArrowUpRight, Info } from "lucide-react";
 import type { Dispatch, SetStateAction } from "react";
-import type { SharedLlmConfig, LlmProvider } from "../types";
-import { ApiKeyInput, Modal, ConfigSelect } from "../components/common";
+import type { SharedLlmConfig, LlmProvider, LlmPreset } from "../types";
+import { ApiKeyInput, Modal, ConfigSelect, Tooltip } from "../components/common";
 import { invoke } from "@tauri-apps/api/core";
 
 export type ModelsPageProps = {
   sharedConfig: SharedLlmConfig;
   setSharedConfig: Dispatch<SetStateAction<SharedLlmConfig>>;
+  /** Polishing presets (read-only here; for badge/notice display + R5.3 cascade) */
+  presets: LlmPreset[];
+  /**
+   * R5.3 cascade: when a referenced provider is deleted, App.tsx clears
+   * `provider_id` and `model` on every preset that pointed to it.
+   * Mirrors the existing shared-layer cleanup (polishing_provider_id etc.).
+   */
+  onClearPresetOverridesForProvider: (providerId: string) => void;
+  /**
+   * R5.2 / R8.2 (v4): jump to LlmPage and focus this preset (scroll + activate).
+   * No "open-popover" action anymore — the model selector is inline so just
+   * showing the preset is enough.
+   */
+  onNavigateToPreset?: (presetId: string) => void;
   showApiKey: boolean;
   setShowApiKey: (next: boolean) => void;
   isRunning: boolean;
@@ -50,6 +64,9 @@ function LatencyBadge({ latencyMs, status }: {
 export function ModelsPage({
   sharedConfig,
   setSharedConfig,
+  presets,
+  onClearPresetOverridesForProvider,
+  onNavigateToPreset,
   showApiKey,
   setShowApiKey,
   isRunning,
@@ -62,10 +79,35 @@ export function ModelsPage({
     latencyMs?: number;  // 新增：连接耗时（毫秒）
   }>({ status: "idle" });
   // 删除确认弹窗状态
-  const [deleteConfirm, setDeleteConfirm] = useState<{ show: boolean; providerId: string | null }>({
+  // referencedPresetNames: 当被删 provider 在 preset.provider_id 中被引用时携带这些名字
+  // 用于扩展 confirm 文案（R5.3）
+  const [deleteConfirm, setDeleteConfirm] = useState<{
+    show: boolean;
+    providerId: string | null;
+    /** R5.3: list of preset names that reference this provider; empty = no cascade impact */
+    referencedPresetNames?: string[];
+  }>({
     show: false,
     providerId: null,
   });
+
+  // R5.1 + R5.2 派生：preset → provider 引用映射，按 provider id 分组
+  // 用于：(1) Polishing 卡片下方 ⓘ 提示行 N 个覆盖；(2) Provider 卡片右上角 🎯 徽章组
+  const presetReferencesByProviderId = useMemo(() => {
+    const map = new Map<string, LlmPreset[]>();
+    for (const preset of presets) {
+      if (!preset.provider_id) continue;
+      const list = map.get(preset.provider_id) ?? [];
+      list.push(preset);
+      map.set(preset.provider_id, list);
+    }
+    return map;
+  }, [presets]);
+
+  const totalOverrideCount = useMemo(
+    () => presets.filter((p) => !!p.provider_id).length,
+    [presets],
+  );
 
   // 注意：前端不再处理迁移逻辑，由后端 config.rs 统一处理
   // 后端 load() 会检测旧配置并自动迁移到 Provider Registry
@@ -102,19 +144,25 @@ export function ModelsPage({
   const handleDeleteProvider = (id: string) => {
     if (sharedConfig.providers.length <= 1) {
       // 使用状态替代 alert（这里可以用 toast 或临时提示）
-      setDeleteConfirm({ show: true, providerId: null }); // 显示错误提示
-      setTimeout(() => setDeleteConfirm({ show: false, providerId: null }), 2000);
+      setDeleteConfirm({ show: true, providerId: null, referencedPresetNames: [] }); // 显示错误提示
+      setTimeout(
+        () => setDeleteConfirm({ show: false, providerId: null, referencedPresetNames: [] }),
+        2000,
+      );
       return;
     }
 
-    // 显示确认弹窗
-    setDeleteConfirm({ show: true, providerId: id });
+    // R5.3: 派生此 provider 被哪些 preset 引用，作为 confirm 文案输入
+    const referencedPresetNames = (presetReferencesByProviderId.get(id) ?? [])
+      .map((p) => p.name);
+
+    setDeleteConfirm({ show: true, providerId: id, referencedPresetNames });
   };
 
   const confirmDelete = () => {
     const id = deleteConfirm.providerId;
     if (!id) {
-      setDeleteConfirm({ show: false, providerId: null });
+      setDeleteConfirm({ show: false, providerId: null, referencedPresetNames: [] });
       return;
     }
 
@@ -129,13 +177,15 @@ export function ModelsPage({
         ...prev,
         providers: newProviders,
         default_provider_id: newDefaultId,
-        // 清理绑定
+        // 清理共享层绑定
         polishing_provider_id: prev.polishing_provider_id === id ? undefined : prev.polishing_provider_id,
         assistant_provider_id: prev.assistant_provider_id === id ? undefined : prev.assistant_provider_id,
         learning_provider_id: prev.learning_provider_id === id ? undefined : prev.learning_provider_id,
       };
     });
-    setDeleteConfirm({ show: false, providerId: null });
+    // R5.3 (方案 A): 同步清空 preset 层覆盖（与 shared 层行为一致）
+    onClearPresetOverridesForProvider(id);
+    setDeleteConfirm({ show: false, providerId: null, referencedPresetNames: [] });
   };
 
   const openAddModal = () => {
@@ -244,6 +294,29 @@ export function ModelsPage({
               options={[{ value: "", label: "跟随默认" }, ...providerOptions]}
               disabled={isRunning}
             />
+            {/* R5.1 (v4): 当存在 preset 单独配置了模型时显示提示行 */}
+            {totalOverrideCount > 0 && (
+              <div className="mt-3 flex items-center justify-between gap-2 text-[11px] text-stone-500">
+                <span className="flex items-center gap-1.5">
+                  <Info size={11} />
+                  {totalOverrideCount} 个预设使用了独立模型
+                </span>
+                {onNavigateToPreset && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      // 跳到首个有独立模型的 preset
+                      const target = presets.find((p) => p.provider_id);
+                      if (target) onNavigateToPreset(target.id);
+                    }}
+                    className="flex items-center gap-0.5 text-stone-600 hover:text-stone-900 font-bold transition-colors"
+                  >
+                    查看
+                    <ArrowUpRight size={11} />
+                  </button>
+                )}
+              </div>
+            )}
           </div>
 
           {/* Assistant Provider Card */}
@@ -358,6 +431,11 @@ export function ModelsPage({
                               </span>
                             );
                           })()}
+                          {/* R5.2: preset 引用徽章（可点击跳转） */}
+                          <PresetReferenceBadges
+                            presetReferences={presetReferencesByProviderId.get(provider.id) ?? []}
+                            onNavigateToPreset={onNavigateToPreset}
+                          />
                         </div>
                       </div>
                     </div>
@@ -580,7 +658,26 @@ export function ModelsPage({
                   <Trash2 size={24} className="text-red-500" />
                 </div>
                 <h3 className="text-lg font-bold text-[var(--ink)] mb-2">确认删除</h3>
-                <p className="text-sm text-stone-500 mb-6">确定要删除这个提供商吗？此操作不可撤销。</p>
+                {(deleteConfirm.referencedPresetNames?.length ?? 0) > 0 ? (
+                  // R5.3: 被 preset 引用时扩展文案，明确告知 cascade 行为（方案 A 同步清空）
+                  <div className="text-sm text-stone-600 mb-6 text-left space-y-2">
+                    <p>
+                      <span className="font-bold text-stone-800">
+                        {deleteConfirm.referencedPresetNames!.length} 个预设
+                      </span>
+                      引用此 Provider（
+                      <span className="font-mono text-xs text-violet-700">
+                        {deleteConfirm.referencedPresetNames!.join("、")}
+                      </span>
+                      ）。
+                    </p>
+                    <p className="text-xs text-stone-500">
+                      删除后这些预设的覆盖将被一并清空，回退到默认 Provider。
+                    </p>
+                  </div>
+                ) : (
+                  <p className="text-sm text-stone-500 mb-6">确定要删除这个提供商吗？此操作不可撤销。</p>
+                )}
                 <div className="flex gap-3 justify-center">
                   <button
                     onClick={() => setDeleteConfirm({ show: false, providerId: null })}
@@ -609,5 +706,70 @@ export function ModelsPage({
         </div>
       </Modal>
     </div>
+  );
+}
+
+type PresetReferenceBadgesProps = {
+  presetReferences: LlmPreset[];
+  onNavigateToPreset?: (presetId: string) => void;
+};
+
+/**
+ * R5.2: Render 🎯 badges for presets that override to this provider.
+ * - 1-2 references: show each preset name as its own clickable badge
+ * - ≥3 references: collapse to `[🎯 +N]` with Tooltip listing all names
+ */
+function PresetReferenceBadges({
+  presetReferences,
+  onNavigateToPreset,
+}: PresetReferenceBadgesProps) {
+  if (presetReferences.length === 0) return null;
+
+  const handleClick = (presetId: string) => {
+    onNavigateToPreset?.(presetId);
+  };
+
+  // R5.2.1: clickable element uses <button> (not <span>) for affordance separation
+  if (presetReferences.length <= 2) {
+    return (
+      <>
+        {presetReferences.map((preset) => (
+          <button
+            key={preset.id}
+            type="button"
+            onClick={(e) => {
+              e.stopPropagation();
+              handleClick(preset.id);
+            }}
+            disabled={!onNavigateToPreset}
+            className="h-[22px] px-2 rounded-full text-[10px] font-bold border border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100 transition-colors flex items-center gap-1 disabled:opacity-60 disabled:cursor-default disabled:hover:bg-violet-50"
+            title={`预设「${preset.name}」覆盖到此 Provider${onNavigateToPreset ? "（点击编辑）" : ""}`}
+          >
+            <Target size={10} />
+            <span className="truncate max-w-[80px]">{preset.name}</span>
+          </button>
+        ))}
+      </>
+    );
+  }
+
+  // ≥3: collapse to single badge with Tooltip listing all names
+  const tooltipContent = presetReferences.map((p) => p.name).join("\n");
+  const firstPreset = presetReferences[0];
+  return (
+    <Tooltip content={tooltipContent}>
+      <button
+        type="button"
+        onClick={(e) => {
+          e.stopPropagation();
+          handleClick(firstPreset.id);
+        }}
+        disabled={!onNavigateToPreset}
+        className="h-[22px] px-2 rounded-full text-[10px] font-bold border border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100 transition-colors flex items-center gap-1 disabled:opacity-60 disabled:cursor-default disabled:hover:bg-violet-50"
+      >
+        <Target size={10} />
+        +{presetReferences.length}
+      </button>
+    </Tooltip>
   );
 }

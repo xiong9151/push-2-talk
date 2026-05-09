@@ -518,6 +518,8 @@ mod tests {
                 id: "test".to_string(),
                 name: "Test Preset".to_string(),
                 system_prompt: "You are a test assistant.".to_string(),
+                provider_id: None,
+                model: None,
             }],
             active_preset_id: "test".to_string(),
         }
@@ -694,5 +696,147 @@ mod tests {
         assert!(msg.contains("Cruiser"));
         assert!(!msg.contains(&"a".repeat(300)));
         assert!(!msg.contains(&"b".repeat(300)));
+    }
+
+    // ============================================================================
+    // PRD per-preset-llm-override — T1-T6 (resolve + hash)
+    // ============================================================================
+
+    use crate::config::LlmProvider;
+
+    fn config_with_two_providers() -> LlmConfig {
+        LlmConfig {
+            shared: SharedLlmConfig {
+                providers: vec![
+                    LlmProvider {
+                        id: "prov-default".to_string(),
+                        name: "Default Provider".to_string(),
+                        endpoint: "https://default.example.com/v1/chat/completions".to_string(),
+                        api_key: "default-key".to_string(),
+                        default_model: "default-model".to_string(),
+                    },
+                    LlmProvider {
+                        id: "prov-strong".to_string(),
+                        name: "Strong Provider".to_string(),
+                        endpoint: "https://strong.example.com/v1/chat/completions".to_string(),
+                        api_key: "strong-key".to_string(),
+                        default_model: "strong-default-model".to_string(),
+                    },
+                ],
+                default_provider_id: "prov-default".to_string(),
+                polishing_provider_id: None,
+                assistant_provider_id: None,
+                learning_provider_id: None,
+                endpoint: None,
+                api_key: None,
+                default_model: None,
+                polishing_model: None,
+                assistant_model: None,
+                learning_model: None,
+            },
+            feature_override: LlmFeatureConfig::default(),
+            presets: vec![
+                LlmPreset {
+                    id: "p-default".to_string(),
+                    name: "Default Preset".to_string(),
+                    system_prompt: "default prompt".to_string(),
+                    provider_id: None,
+                    model: None,
+                },
+                LlmPreset {
+                    id: "p-override".to_string(),
+                    name: "Override Preset".to_string(),
+                    system_prompt: "override prompt".to_string(),
+                    provider_id: Some("prov-strong".to_string()),
+                    model: None,
+                },
+            ],
+            active_preset_id: "p-default".to_string(),
+        }
+    }
+
+    /// T1: preset.provider_id 覆盖时，resolve 到目标 provider
+    #[test]
+    fn test_preset_provider_override_resolves() {
+        let mut config = config_with_two_providers();
+        config.active_preset_id = "p-override".to_string();
+        let resolved = config.resolve_polishing();
+        assert!(resolved.endpoint.starts_with("https://strong.example.com"));
+        assert_eq!(resolved.api_key, "strong-key");
+        assert_eq!(resolved.model, "strong-default-model");
+    }
+
+    /// T2: preset.provider_id + preset.model 同时覆盖时，model 用 preset.model
+    #[test]
+    fn test_preset_model_override_resolves() {
+        let mut config = config_with_two_providers();
+        config.active_preset_id = "p-override".to_string();
+        config.presets[1].model = Some("custom-model".to_string());
+        let resolved = config.resolve_polishing();
+        assert_eq!(resolved.api_key, "strong-key");
+        assert_eq!(resolved.model, "custom-model");
+    }
+
+    /// T3: preset.provider_id 指向不存在的 provider 时，fallback 到默认链（不 panic）
+    /// 边界防御场景（手工编辑 config 才能触发）
+    #[test]
+    fn test_preset_provider_missing_falls_back() {
+        let mut config = config_with_two_providers();
+        config.presets[1].provider_id = Some("non-existent-id".to_string());
+        config.active_preset_id = "p-override".to_string();
+        let resolved = config.resolve_polishing();
+        // Falls back to default chain → polishing_provider_id (None) → default_provider_id ("prov-default")
+        assert_eq!(resolved.api_key, "default-key");
+        assert_eq!(resolved.model, "default-model");
+    }
+
+    /// T4: 切换 active_preset 到有覆盖的 preset 时，hash 变化（resolved.* 三元组变了）
+    #[test]
+    fn test_compute_config_hash_changes_on_preset_switch_with_override() {
+        let mut config = config_with_two_providers();
+        // active = p-default → resolves to default-key/default-model
+        let hash_default = LlmPostProcessor::compute_config_hash(&config);
+
+        config.active_preset_id = "p-override".to_string();
+        // active = p-override → resolves to strong-key/strong-default-model
+        let hash_override = LlmPostProcessor::compute_config_hash(&config);
+
+        assert_ne!(
+            hash_default, hash_override,
+            "切到覆盖 preset 后 hash 必须变化，否则 LlmPostProcessor 不会重建"
+        );
+    }
+
+    /// T5: 仅修改不在 hash 内的字段时 hash 不变（回归测试）
+    /// 注意：hash 包含 resolved.endpoint/api_key/model + active_preset_id + 当前 preset 的 system_prompt
+    /// 切 preset / 改 system_prompt / 改 provider_id 都会让 hash 变化（这是现状行为）
+    /// 此测试断言：仅改 preset.name（不在 hash 内）时 hash 稳定
+    #[test]
+    fn test_compute_config_hash_stable_when_only_unrelated_field_changes() {
+        let config1 = config_with_two_providers();
+        let hash1 = LlmPostProcessor::compute_config_hash(&config1);
+
+        let mut config2 = config_with_two_providers();
+        config2.presets[0].name = "Renamed Preset".to_string();
+        let hash2 = LlmPostProcessor::compute_config_hash(&config2);
+
+        assert_eq!(
+            hash1, hash2,
+            "改 preset.name 不应影响 hash（name 不在 hash 输入内）"
+        );
+    }
+
+    /// T6: preset 覆盖 provider 时跳过 shared.polishing_model（核心契约）
+    /// 避免徽章文案显示「provider.default_model」但实际行为却用 polishing_model 的错位
+    #[test]
+    fn test_resolve_skips_shared_polishing_model_when_preset_overrides_provider() {
+        let mut config = config_with_two_providers();
+        config.shared.polishing_model = Some("shared-polishing-model".to_string());
+        config.active_preset_id = "p-override".to_string();
+        // p-override.provider_id = prov-strong, model = None
+        // 预期：跳过 shared.polishing_model，用 prov-strong.default_model
+        let resolved = config.resolve_polishing();
+        assert_eq!(resolved.model, "strong-default-model");
+        assert_ne!(resolved.model, "shared-polishing-model");
     }
 }

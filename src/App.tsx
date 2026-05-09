@@ -26,7 +26,6 @@ import { loadUsageStats } from "./utils";
 import { TopStatusBar } from "./components/layout/TopStatusBar";
 import { Sidebar } from "./components/layout/Sidebar";
 import { RightPanel } from "./components/layout/RightPanel";
-import { GlobalNoticeHost } from "./components/notice/GlobalNoticeHost";
 import { resolveGlobalNotice } from "./utils/globalNotice";
 import { CloseConfirmDialog } from "./components/modals/CloseConfirmDialog";
 import { UpdateModal } from "./components/modals/UpdateModal";
@@ -41,6 +40,7 @@ import { DashboardPage } from "./pages/DashboardPage";
 import { AsrPage } from "./pages/AsrPage";
 import { ModelsPage } from "./pages/ModelsPage";
 import { LlmPage } from "./pages/LlmPage";
+import { clearPresetOverridesForProvider } from "./utils/presetOverride";
 import { AssistantPage } from "./pages/AssistantPage";
 import { DictionaryPage } from "./pages/DictionaryPage";
 import { HistoryPage } from "./pages/HistoryPage";
@@ -126,6 +126,13 @@ function App() {
     handleClearHistory,
   } = useHistoryController();
   const [activePage, setActivePage] = useState<AppPage>("dashboard");
+  // R8.2 (v4): cross-page focus state — set by ModelsPage callback, consumed by LlmPage useEffect
+  // v4 simplification: no "action" field — model selector is inline so just scrolling+activating is enough
+  const [pendingPresetFocus, setPendingPresetFocus] = useState<{ presetId: string } | null>(null);
+  const navigateToPreset = useCallback((presetId: string) => {
+    setPendingPresetFocus({ presetId });
+    setActivePage("llm");
+  }, []);
   const [showAsrApiKey, setShowAsrApiKey] = useState(false);
   const [showModelsApiKey, setShowModelsApiKey] = useState(false);
   const [showCloseDialog, setShowCloseDialog] = useState(false);
@@ -693,6 +700,12 @@ function App() {
   const isPolishing = status === "polishing";
   const isAssistantProcessing = status === "assistant_processing";
   const isConfigLocked = isRecording || isTranscribing || isPolishing || isAssistantProcessing;
+  const globalNotice = resolveGlobalNotice({
+    syncWindowSource: syncWindowSnapshot.source,
+    syncStatus,
+    updateStatus,
+    updateDownloadProgress: downloadProgress,
+  });
 
   const navigate = (page: AppPage) => setActivePage(page);
 
@@ -738,6 +751,15 @@ function App() {
                 setLlmConfig((prev) => ({ ...prev, shared: newShared }));
               }
             }}
+            presets={llmConfig.presets}
+            onClearPresetOverridesForProvider={(providerId) => {
+              // R5.3 (方案 A): 删除 provider 时同步清空所有引用此 provider 的 preset 覆盖
+              setLlmConfig((prev) => ({
+                ...prev,
+                presets: clearPresetOverridesForProvider(prev.presets, providerId),
+              }));
+            }}
+            onNavigateToPreset={navigateToPreset}
             showApiKey={showModelsApiKey}
             setShowApiKey={setShowModelsApiKey}
             isRunning={isConfigLocked}
@@ -753,6 +775,8 @@ function App() {
             handleDeletePreset={handleDeletePreset}
             handleUpdateActivePreset={handleUpdateActivePreset}
             onNavigateToModels={() => setActivePage("models")}
+            pendingFocus={pendingPresetFocus}
+            onFocusConsumed={() => setPendingPresetFocus(null)}
             isRunning={isConfigLocked}
           />
         );
@@ -859,16 +883,6 @@ function App() {
         syncWindowSource: syncWindowSnapshot.source,
       }}
     >
-      {/* Floating notice capsule — fixed position, outside document flow */}
-      <GlobalNoticeHost
-        notice={resolveGlobalNotice({
-          syncWindowSource: syncWindowSnapshot.source,
-          syncStatus,
-          updateStatus,
-          updateDownloadProgress: downloadProgress,
-        })}
-      />
-
       <div className="h-screen w-full bg-[var(--paper)] text-[var(--ink)] font-serif flex">
         <Sidebar
           collapsed={sidebarCollapsed}
@@ -884,6 +898,7 @@ function App() {
             recordingTime={recordingTime}
             formatTime={formatTime}
             usageStats={usageStats}
+            globalNotice={globalNotice}
           />
 
           <div className="flex-1 min-h-0 flex overflow-hidden">

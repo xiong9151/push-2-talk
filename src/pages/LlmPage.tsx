@@ -1,7 +1,7 @@
-import type { Dispatch, SetStateAction } from "react";
+import { useEffect, useRef, useState, type Dispatch, type SetStateAction } from "react";
 import { AlertCircle, MessageSquareQuote, Plus, Trash2 } from "lucide-react";
 import type { LlmConfig, LlmPreset } from "../types";
-import { LlmConnectionConfig } from "../components/common";
+import { PresetModelSelect } from "../components/llm/PresetModelSelect";
 
 export type LlmPageProps = {
   llmConfig: LlmConfig;
@@ -11,6 +11,10 @@ export type LlmPageProps = {
   handleDeletePreset: (id: string) => void;
   handleUpdateActivePreset: (key: keyof LlmPreset, value: string) => void;
   onNavigateToModels?: () => void;
+  /** R8.2 (v4 simplified): scroll to this preset and select it as active */
+  pendingFocus?: { presetId: string } | null;
+  /** R8.2: must be called once consumed so the parent can clear pending state */
+  onFocusConsumed?: () => void;
   isRunning: boolean;
 };
 
@@ -22,8 +26,47 @@ export function LlmPage({
   handleDeletePreset,
   handleUpdateActivePreset,
   onNavigateToModels,
+  pendingFocus,
+  onFocusConsumed,
   isRunning,
 }: LlmPageProps) {
+  const presetRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  // 跳转后临时高亮目标 preset row（视觉提示位置，不切 active 也不改配置）
+  const [highlightedPresetId, setHighlightedPresetId] = useState<string | null>(null);
+
+  // R8.2 (v4.1): consume pendingFocus — scroll + visual highlight only
+  // 不切 active_preset_id（切了会触发配置保存提示，对"跳转浏览"语义错位）
+  useEffect(() => {
+    if (!pendingFocus) return;
+    const node = presetRowRefs.current[pendingFocus.presetId];
+    if (node) {
+      node.scrollIntoView({ behavior: "smooth", block: "center" });
+      setHighlightedPresetId(pendingFocus.presetId);
+    }
+    onFocusConsumed?.();
+  }, [pendingFocus, onFocusConsumed]);
+
+  // 高亮自动消失（2 秒后）
+  useEffect(() => {
+    if (!highlightedPresetId) return;
+    const timer = setTimeout(() => setHighlightedPresetId(null), 2000);
+    return () => clearTimeout(timer);
+  }, [highlightedPresetId]);
+
+  // v4: commit per-preset model directly (no popover, no transactional state)
+  const commitPresetModel = (
+    presetId: string,
+    providerId: string | undefined,
+    model: string | undefined,
+  ) => {
+    setLlmConfig((prev) => ({
+      ...prev,
+      presets: prev.presets.map((p) =>
+        p.id === presetId ? { ...p, provider_id: providerId, model } : p,
+      ),
+    }));
+  };
+
   return (
     <div className="mx-auto max-w-5xl font-sans">
       <div className="bg-white border border-[var(--stone)] rounded-2xl overflow-hidden">
@@ -49,13 +92,23 @@ export function LlmPage({
                 return (
                   <div
                     key={preset.id}
-                    onClick={() => setLlmConfig((prev) => ({ ...prev, active_preset_id: preset.id }))}
+                    ref={(node) => {
+                      presetRowRefs.current[preset.id] = node;
+                    }}
+                    onClick={() =>
+                      setLlmConfig((prev) => ({ ...prev, active_preset_id: preset.id }))
+                    }
                     className={[
-                      "group flex items-center justify-between p-3 rounded-2xl cursor-pointer transition-colors",
-                      active ? "bg-white border border-[var(--stone)] shadow-sm" : "hover:bg-white/60",
+                      "group flex items-center justify-between p-3 rounded-2xl cursor-pointer transition-all gap-2",
+                      active
+                        ? "bg-white border border-[var(--stone)] shadow-sm"
+                        : "hover:bg-white/60",
+                      highlightedPresetId === preset.id
+                        ? "ring-2 ring-[rgba(217,119,87,0.45)] ring-offset-2 ring-offset-[var(--paper)]"
+                        : "",
                     ].join(" ")}
                   >
-                    <div className="flex items-center gap-3 min-w-0">
+                    <div className="flex items-center gap-3 min-w-0 flex-1">
                       <div
                         className={[
                           "p-2 rounded-xl shrink-0",
@@ -66,7 +119,12 @@ export function LlmPage({
                       >
                         <MessageSquareQuote size={14} />
                       </div>
-                      <span className={["text-sm font-bold truncate", active ? "text-[var(--ink)]" : "text-stone-700"].join(" ")}>
+                      <span
+                        className={[
+                          "text-sm font-bold truncate",
+                          active ? "text-[var(--ink)]" : "text-stone-700",
+                        ].join(" ")}
+                      >
                         {preset.name}
                       </span>
                     </div>
@@ -98,7 +156,9 @@ export function LlmPage({
           <section className="col-span-8 flex flex-col">
             <div className="flex-1 overflow-y-auto custom-scroll p-6 space-y-6">
               <div className="space-y-2">
-                <label className="text-xs font-bold text-stone-500 uppercase tracking-widest">预设名称</label>
+                <label className="text-xs font-bold text-stone-500 uppercase tracking-widest">
+                  预设名称
+                </label>
                 <input
                   type="text"
                   value={activePreset?.name || ""}
@@ -109,7 +169,9 @@ export function LlmPage({
               </div>
 
               <div className="space-y-2">
-                <label className="text-xs font-bold text-stone-500 uppercase tracking-widest">System Prompt</label>
+                <label className="text-xs font-bold text-stone-500 uppercase tracking-widest">
+                  System Prompt
+                </label>
                 <textarea
                   value={activePreset?.system_prompt || ""}
                   disabled={isRunning}
@@ -121,14 +183,17 @@ export function LlmPage({
 
               <div className="h-px bg-[var(--stone)]" />
 
-              <div className="space-y-4">
-                <h4 className="text-xs font-bold text-stone-400 uppercase tracking-widest">LLM 连接配置</h4>
-                <LlmConnectionConfig
-                  sharedConfig={llmConfig.shared}
-                  featureName="polishing"
+              {activePreset && (
+                <PresetModelSelect
+                  preset={activePreset}
+                  llmConfig={llmConfig}
+                  disabled={isRunning}
+                  onCommit={(providerId, model) =>
+                    commitPresetModel(activePreset.id, providerId, model)
+                  }
                   onNavigateToModels={onNavigateToModels}
                 />
-              </div>
+              )}
             </div>
           </section>
         </div>

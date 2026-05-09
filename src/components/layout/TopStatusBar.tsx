@@ -1,11 +1,14 @@
 import { Mic, Type } from "lucide-react";
 import type { AppStatus, UsageStats } from "../../types";
+import type { GlobalNoticePayload } from "../../utils/globalNotice";
+import { GlobalNoticeBar } from "../common/GlobalNoticeBar";
 
 export type TopStatusBarProps = {
   status: AppStatus;
   recordingTime: number;
   formatTime: (seconds: number) => string;
   usageStats?: UsageStats;
+  globalNotice?: GlobalNoticePayload | null;
 };
 
 export function TopStatusBar({
@@ -13,6 +16,7 @@ export function TopStatusBar({
   recordingTime,
   formatTime,
   usageStats,
+  globalNotice,
 }: TopStatusBarProps) {
   const isRecording = status === "recording";
   const isTranscribing = status === "transcribing";
@@ -22,6 +26,20 @@ export function TopStatusBar({
 
   return (
     <div className="relative border-b border-[var(--stone)] bg-[var(--paper)] font-sans">
+      <div
+        className={`overflow-hidden transition-all duration-200 ${
+          globalNotice ? "max-h-10 opacity-100" : "max-h-0 opacity-0"
+        }`}
+      >
+        {globalNotice && (
+          <GlobalNoticeBar
+            message={globalNotice.message}
+            loading={globalNotice.loading}
+            tone={globalNotice.tone}
+          />
+        )}
+      </div>
+
       {/* ── Main status bar content (always stable, never shifts) ── */}
       <div className="px-6 py-3 flex items-center justify-between">
         <div
