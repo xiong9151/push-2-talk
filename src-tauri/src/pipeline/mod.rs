@@ -10,6 +10,5 @@ pub mod focus;
 mod normal;
 mod types;
 
-pub use assistant::AssistantPipeline;
 pub use normal::NormalPipeline;
 pub use types::*;

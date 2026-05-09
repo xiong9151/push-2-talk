@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default permissions for the application",
-  "windows": ["main", "overlay", "notification"],
+  "windows": ["main", "overlay", "notification", "result_panel"],
   "permissions": [
     "core:default",
     "core:window:default",
@@ -13,6 +13,7 @@
     "core:window:allow-show",
     "core:window:allow-set-position",
     "core:window:allow-set-focus",
+    "core:window:allow-start-dragging",
     "core:event:default",
     "core:event:allow-listen",
     "core:event:allow-emit",

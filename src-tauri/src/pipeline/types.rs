@@ -25,7 +25,8 @@ pub enum TranscriptionMode {
 /// 用于智能指令模式等需要额外上下文信息的场景
 #[derive(Debug, Clone, Default)]
 pub struct TranscriptionContext {
-    /// 用户选中的文本
+    /// 用户选中的文本（仅 AssistantPipeline 使用）
+    #[allow(dead_code)]
     pub selected_text: Option<String>,
 }
 

@@ -18,6 +18,7 @@ export default defineConfig({
         main: resolve(__dirname, "index.html"),
         overlay: resolve(__dirname, "overlay.html"),
         notification: resolve(__dirname, "notification.html"),
+        "result-panel": resolve(__dirname, "result-panel.html"),
       },
     },
   },

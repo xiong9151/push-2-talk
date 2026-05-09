@@ -55,3 +55,7 @@ docs/
 
 # Git worktrees
 .worktrees/
+.gitnexus
+
+# Fusion metadata (local)
+.fusion/

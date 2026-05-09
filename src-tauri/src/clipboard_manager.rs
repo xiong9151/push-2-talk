@@ -161,6 +161,17 @@ fn wait_for_clipboard_update(
     Ok(None)
 }
 
+/// 将文本写入系统剪贴板（不模拟粘贴）
+///
+/// 与 `insert_text_with_context` 不同，此函数仅将文本写入剪贴板，
+/// 不执行 Ctrl+V 模拟。适用于用户手动粘贴的场景（如结果面板的"复制"按钮）。
+pub fn copy_to_clipboard(text: &str) -> Result<()> {
+    let mut clipboard = Clipboard::new()?;
+    clipboard.set_text(text.to_string())?;
+    tracing::debug!("clipboard_manager: 已复制到剪贴板 (长度: {} 字符)", text.len());
+    Ok(())
+}
+
 /// 插入文本（支持上下文感知）
 ///
 /// # 参数
@@ -223,5 +234,25 @@ mod tests {
         match result {
             Ok(_) | Err(_) => {}
         }
+    }
+
+    #[test]
+    fn test_copy_to_clipboard_writes_text() {
+        // copy_to_clipboard 应将文本写入系统剪贴板
+        let text = "test_copy_to_clipboard_marker";
+        let result = copy_to_clipboard(text);
+        assert!(result.is_ok(), "copy_to_clipboard 应成功写入剪贴板");
+
+        // 验证剪贴板内容
+        let mut clipboard = Clipboard::new().unwrap();
+        let content = clipboard.get_text().unwrap();
+        assert_eq!(content, text);
+    }
+
+    #[test]
+    fn test_copy_to_clipboard_empty_string() {
+        // 空字符串也应成功
+        let result = copy_to_clipboard("");
+        assert!(result.is_ok());
     }
 }

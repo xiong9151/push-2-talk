@@ -36,7 +36,7 @@ use futures_util::FutureExt;
 use hotkey_service::HotkeyService;
 use llm_post_processor::LlmPostProcessor;
 use openai_client::{ChatOptions, Message, OpenAiClient, OpenAiClientConfig};
-use pipeline::{AssistantPipeline, NormalPipeline, TranscriptionContext};
+use pipeline::{NormalPipeline, TranscriptionContext};
 use streaming_recorder::StreamingRecorder;
 use text_inserter::TextInserter;
 use usage_stats::UsageStats;
@@ -146,6 +146,105 @@ struct AppState {
     builtin_hotwords_raw: Arc<Mutex<String>>,
     /// 内置词库后台更新任务是否已启动（进程级单例）
     builtin_dictionary_updater_started: Arc<AtomicBool>,
+    /// AI 助手模式：多轮对话会话（替代单轮 PendingAssistantResult）
+    conversation_session: Arc<Mutex<Option<ConversationSession>>>,
+    /// AI 助手模式：是否正在处理中（追问期间阻止重复触发）
+    is_assistant_processing: Arc<AtomicBool>,
+}
+
+// ================== 多轮对话数据结构 ==================
+
+/// 对话提示词模式（首轮锁定，追问不变）
+#[derive(Debug, Clone, PartialEq)]
+pub(crate) enum PromptMode {
+    /// 问答模式（无选中文本时使用）
+    QA,
+    /// 文本处理模式（有选中文本时使用）
+    TextProcessing,
+}
+
+/// 单轮对话记录
+#[derive(Debug, Clone, serde::Serialize)]
+pub(crate) struct ConversationTurn {
+    pub user_instruction: String,
+    pub selected_text: Option<String>,
+    pub assistant_response: String,
+    pub asr_time_ms: u64,
+    pub llm_time_ms: u64,
+}
+
+/// 多轮对话会话（替代 PendingAssistantResult）
+#[allow(dead_code)]
+pub(crate) struct ConversationSession {
+    pub id: String,
+    pub turns: Vec<ConversationTurn>,
+    /// 首轮锁定的提示词模式
+    pub system_prompt_mode: PromptMode,
+    /// 首轮触发时的目标窗口句柄
+    pub target_hwnd: Option<isize>,
+    pub created_at: std::time::Instant,
+}
+
+// ================== 多轮对话事件 Payload ==================
+
+/// 单轮对话的前端 payload
+#[derive(Clone, serde::Serialize)]
+struct ConversationTurnPayload {
+    user_instruction: String,
+    selected_text: Option<String>,
+    has_selection: bool,
+    assistant_response: String,
+    asr_time_ms: u64,
+    llm_time_ms: u64,
+}
+
+/// 完整会话状态 payload（用于 pull 模式）
+#[derive(Clone, serde::Serialize)]
+struct ConversationStatePayload {
+    session_id: String,
+    turns: Vec<ConversationTurnPayload>,
+}
+
+/// 追问录音完成后立即发出（前端显示用户消息 + loading）
+#[derive(Clone, serde::Serialize)]
+struct TurnPendingPayload {
+    user_instruction: String,
+    selected_text: Option<String>,
+    has_selection: bool,
+}
+
+/// 一轮完成事件 payload
+#[derive(Clone, serde::Serialize)]
+struct TurnCompletePayload {
+    session_id: String,
+    turn: ConversationTurnPayload,
+    is_followup: bool,
+}
+
+/// LLM 调用失败事件 payload
+#[derive(Clone, serde::Serialize)]
+struct TurnErrorPayload {
+    session_id: String,
+    error_message: String,
+}
+
+/// 将会话历史格式化并发送 transcription_complete 事件（用于 History 记录）
+fn emit_conversation_history(app: &AppHandle, session: &ConversationSession, inserted: bool) {
+    let formatted = assistant_processor::format_conversation_for_copy(&session.turns);
+    let total_asr: u64 = session.turns.iter().map(|t| t.asr_time_ms).sum();
+    let total_llm: u64 = session.turns.iter().map(|t| t.llm_time_ms).sum();
+
+    let result = TranscriptionResult {
+        text: formatted,
+        original_text: session.turns.first().map(|t| t.user_instruction.clone()),
+        selected_text: session.turns.first().and_then(|t| t.selected_text.clone()),
+        asr_time_ms: total_asr,
+        llm_time_ms: Some(total_llm),
+        total_time_ms: total_asr + total_llm,
+        mode: Some("assistant".to_string()),
+        inserted: Some(inserted),
+    };
+    let _ = app.emit("transcription_complete", result);
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -1767,6 +1866,9 @@ async fn start_app(
     let is_running_stop = Arc::clone(&state.is_running);
     let enable_fallback_stop = Arc::clone(&state.enable_fallback);
 
+    // AI 助手处理中标记（用于 on_start 防重复触发）
+    let is_assistant_processing_start = Arc::clone(&state.is_assistant_processing);
+
     // 松手模式相关变量（用于 on_start）
     let is_recording_locked_start = Arc::clone(&state.is_recording_locked);
     let _lock_timer_handle_start = Arc::clone(&state.lock_timer_handle);
@@ -1802,6 +1904,14 @@ async fn start_app(
 
         if !*is_running_start.lock().unwrap() {
             tracing::debug!("服务已停止，忽略快捷键按下事件");
+            return;
+        }
+
+        // === AI 助手处理中阻止重复触发（R8）===
+        if trigger_mode == config::TriggerMode::AiAssistant
+            && is_assistant_processing_start.load(Ordering::SeqCst)
+        {
+            tracing::info!("AI 助手正在处理中，忽略重复触发");
             return;
         }
 
@@ -2010,7 +2120,7 @@ async fn start_app(
                     }
                 }
                 config::TriggerMode::AiAssistant => {
-                    // AI 助手模式：使用 AssistantPipeline
+                    // AI 助手模式：多轮对话处理
                     tracing::info!("使用 AI 助手模式处理");
 
                     // 等待物理按键完全释放后再捕获剪贴板
@@ -2018,22 +2128,24 @@ async fn start_app(
                     tokio::time::sleep(std::time::Duration::from_millis(100)).await;
 
                     // 捕获选中文本（此时用户已松开热键，Ctrl+C 模拟安全）
+                    // 剪贴板即时释放：ClipboardGuard 在此 scope 结束时 drop，立即恢复用户剪贴板
                     tracing::info!("AI 助手模式：开始捕获选中文本...");
-                    let (clipboard_guard, selected_text) =
-                        match clipboard_manager::get_selected_text() {
-                            Ok((guard, text)) => {
-                                if let Some(ref t) = text {
-                                    tracing::info!("已捕获选中文本: {} 字符", t.len());
-                                } else {
-                                    tracing::info!("无选中文本，将使用问答模式");
-                                }
-                                (Some(guard), text)
+                    let selected_text = match clipboard_manager::get_selected_text() {
+                        Ok((guard, text)) => {
+                            if let Some(ref t) = text {
+                                tracing::info!("已捕获选中文本: {} 字符", t.len());
+                            } else {
+                                tracing::info!("无选中文本，将使用问答模式");
                             }
-                            Err(e) => {
-                                tracing::warn!("捕获选中文本失败: {}，继续处理但无上下文", e);
-                                (None, None)
-                            }
-                        };
+                            // guard 在此 scope 结束时 drop，自动恢复剪贴板
+                            drop(guard);
+                            text
+                        }
+                        Err(e) => {
+                            tracing::warn!("捕获选中文本失败: {}，继续处理但无上下文", e);
+                            None
+                        }
+                    };
 
                     handle_assistant_mode(
                         app,
@@ -2045,7 +2157,6 @@ async fn start_app(
                         realtime_provider_state,
                         audio_sender_handle,
                         assistant_processor,
-                        clipboard_guard,
                         selected_text,
                         qwen_client_state,
                         sensevoice_client_state,
@@ -2084,9 +2195,11 @@ async fn start_app(
     ))
 }
 
-/// AI 助手模式处理
+/// AI 助手模式处理（多轮对话）
 ///
-/// 使用 AssistantPipeline 进行上下文感知的 LLM 处理
+/// 支持新对话和追问两条路径：
+/// - 新对话（session = None）：创建会话 → LLM 处理 → 弹出结果面板
+/// - 追问（session = Some）：LLM 追问处理 → 追加到现有会话 → 更新面板
 async fn handle_assistant_mode(
     app: AppHandle,
     recorder: Arc<Mutex<Option<AudioRecorder>>>,
@@ -2097,7 +2210,6 @@ async fn handle_assistant_mode(
     realtime_provider: Arc<Mutex<Option<config::AsrProvider>>>,
     audio_sender_handle: Arc<Mutex<Option<tokio::task::JoinHandle<()>>>>,
     assistant_processor: Arc<Mutex<Option<AssistantProcessor>>>,
-    clipboard_guard: Option<clipboard_manager::ClipboardGuard>,
     selected_text: Option<String>,
     qwen_client_state: Arc<Mutex<Option<QwenASRClient>>>,
     sensevoice_client_state: Arc<Mutex<Option<SenseVoiceClient>>>,
@@ -2276,70 +2388,292 @@ async fn handle_assistant_mode(
         asr_result
     };
 
-    // 3. 使用 AssistantPipeline 处理
-    let processor = { assistant_processor.lock().unwrap().clone() };
+    // 3. 解包 ASR 结果
+    let asr_text = match final_result {
+        Ok(text) => {
+            tracing::info!("AI 助手 ASR 结果: {} ({}ms)", text, asr_time_ms);
+            text
+        }
+        Err(e) => {
+            hide_overlay_window(&app).await;
+            let _ = recording_start_instant.lock().unwrap().take();
+            tracing::error!("AI 助手 ASR 失败: {}", e);
+            let _ = app.emit("error", format!("AI 助手处理失败: {}", e));
+            return;
+        }
+    };
+
+    // 空文本检查
+    if asr_text.trim().is_empty() {
+        hide_overlay_window(&app).await;
+        let _ = recording_start_instant.lock().unwrap().take();
+        tracing::info!("AI 助手: ASR 返回空文本，跳过处理");
+        return;
+    }
+
+    // 4. TNL 技术规范化
     let dictionary = {
         let state = app.state::<AppState>();
         let dict = state.dictionary.lock().unwrap().clone();
         dict
     };
-    let pipeline = AssistantPipeline::new();
-
-    let context = TranscriptionContext {
-        selected_text,
-        ..Default::default()
+    let user_instruction = {
+        let tnl_enabled = config::AppConfig::load()
+            .map(|(c, _)| c.tnl_config.enabled)
+            .unwrap_or(true);
+        if tnl_enabled {
+            let engine = tnl::TnlEngine::new(dictionary);
+            let tnl_result = engine.normalize(&asr_text);
+            if tnl_result.changed {
+                tracing::info!(
+                    "AI助手 TNL: {} → {} ({}us)",
+                    asr_text,
+                    tnl_result.text,
+                    tnl_result.elapsed_us
+                );
+            }
+            tnl_result.text
+        } else {
+            asr_text.clone()
+        }
     };
 
-    let pipeline_result = pipeline
-        .process(
-            &app,
-            processor,
-            clipboard_guard,
-            final_result,
-            asr_time_ms,
-            context,
-            target_hwnd,
-            dictionary,
-        )
-        .await;
+    // 5. 获取 processor
+    let processor = { assistant_processor.lock().unwrap().clone() };
+    let Some(processor) = processor else {
+        hide_overlay_window(&app).await;
+        let _ = recording_start_instant.lock().unwrap().take();
+        let _ = app.emit(
+            "error",
+            "AI 助手模式需要配置 LLM，请先在设置中配置 AI 助手 API".to_string(),
+        );
+        return;
+    };
 
-    // 4. 处理结果
-    match pipeline_result {
-        Ok(result) => {
-            hide_overlay_window(&app).await;
+    // 6. 检查会话状态：分支新对话 / 追问
+    let state = app.state::<AppState>();
+    let session_info = {
+        let lock = state.conversation_session.lock().unwrap();
+        lock.as_ref()
+            .map(|s| (s.id.clone(), s.turns.clone(), s.system_prompt_mode.clone()))
+    };
 
-            // 更新统计数据（后端全权负责）
-            if let Some(start_time) = recording_start_instant.lock().unwrap().take() {
-                let recording_ms = start_time.elapsed().as_millis() as u64;
-                // 统计非空白字符数（与前端旧逻辑保持一致）
-                let recognized_chars =
-                    result.text.chars().filter(|c| !c.is_whitespace()).count() as u64;
+    if let Some((session_id, history, prompt_mode)) = session_info {
+        // =================== 追问路径 ===================
 
-                let mut stats = usage_stats.lock().unwrap();
-                if let Err(e) = stats.update_and_save(recording_ms, recognized_chars) {
-                    tracing::error!("更新统计数据失败: {}", e);
-                }
-            }
-
-            let transcription_result = TranscriptionResult {
-                text: result.text,
-                original_text: result.original_text,
-                selected_text: result.selected_text,
-                asr_time_ms: result.asr_time_ms,
-                llm_time_ms: result.llm_time_ms,
-                total_time_ms: result.total_time_ms,
-                mode: Some(format!("{:?}", result.mode).to_lowercase()),
-                inserted: Some(result.inserted),
-            };
-
-            let _ = app.emit("transcription_complete", transcription_result);
+        // 原子 CAS 防并行追问：热键双触发（rdev ghost key）会导致两个管道并行进入此处，
+        // 使用 compare_exchange 确保只有第一个管道能继续，第二个直接返回。
+        if state
+            .is_assistant_processing
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            tracing::warn!("AI 助手: 已有追问在处理中，忽略并行触发（疑似热键双触发）");
+            return;
         }
-        Err(e) => {
-            hide_overlay_window(&app).await;
-            // 清理录音开始时间（防止下次录音时使用错误的时间）
-            let _ = recording_start_instant.lock().unwrap().take();
-            tracing::error!("AI 助手处理失败: {}", e);
-            let _ = app.emit("error", format!("AI 助手处理失败: {}", e));
+
+        // 发送 turn_pending 事件（前端立即显示用户消息 + loading）
+        let pending_payload = TurnPendingPayload {
+            user_instruction: user_instruction.clone(),
+            selected_text: selected_text.clone(),
+            has_selection: selected_text.is_some(),
+        };
+        let _ = app.emit("assistant_turn_pending", pending_payload);
+
+        // 隐藏 overlay
+        hide_overlay_window(&app).await;
+
+        // 更新统计
+        if let Some(start_time) = recording_start_instant.lock().unwrap().take() {
+            let recording_ms = start_time.elapsed().as_millis() as u64;
+            let recognized_chars = user_instruction
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .count() as u64;
+            let mut stats = usage_stats.lock().unwrap();
+            if let Err(e) = stats.update_and_save(recording_ms, recognized_chars) {
+                tracing::error!("更新统计数据失败: {}", e);
+            }
+        }
+
+        // 调用 LLM（追问模式）
+        let _ = app.emit("post_processing", "assistant");
+        let llm_start = std::time::Instant::now();
+
+        let result = processor
+            .process_followup(
+                &history,
+                &user_instruction,
+                selected_text.as_deref(),
+                &prompt_mode,
+            )
+            .await;
+
+        let llm_time_ms = llm_start.elapsed().as_millis() as u64;
+
+        match result {
+            Ok(response_text) => {
+                let turn = ConversationTurn {
+                    user_instruction: user_instruction.clone(),
+                    selected_text: selected_text.clone(),
+                    assistant_response: response_text,
+                    asr_time_ms,
+                    llm_time_ms,
+                };
+
+                // Push to session
+                {
+                    let mut lock = state.conversation_session.lock().unwrap();
+                    if let Some(ref mut session) = *lock {
+                        session.turns.push(turn.clone());
+                    } else {
+                        // 用户在处理期间关闭了面板，丢弃结果
+                        tracing::warn!(
+                            "AI 助手: 追问完成但会话已关闭，丢弃结果"
+                        );
+                        state
+                            .is_assistant_processing
+                            .store(false, Ordering::SeqCst);
+                        return;
+                    }
+                }
+
+                // 发送 turn_complete 事件
+                let payload = TurnCompletePayload {
+                    session_id,
+                    turn: ConversationTurnPayload {
+                        user_instruction: turn.user_instruction,
+                        selected_text: turn.selected_text,
+                        has_selection: selected_text.is_some(),
+                        assistant_response: turn.assistant_response,
+                        asr_time_ms: turn.asr_time_ms,
+                        llm_time_ms: turn.llm_time_ms,
+                    },
+                    is_followup: true,
+                };
+                let _ = app.emit("assistant_turn_complete", payload);
+                tracing::info!(
+                    "AI 助手追问完成 (ASR: {}ms, LLM: {}ms)",
+                    asr_time_ms,
+                    llm_time_ms
+                );
+            }
+            Err(e) => {
+                // 发送 turn_error 事件（不写入 turns，用户可重试）
+                let error_payload = TurnErrorPayload {
+                    session_id,
+                    error_message: format!("{}", e),
+                };
+                let _ = app.emit("assistant_turn_error", error_payload);
+                tracing::error!("AI 助手追问失败: {}", e);
+            }
+        }
+
+        state
+            .is_assistant_processing
+            .store(false, Ordering::SeqCst);
+    } else {
+        // =================== 新会话路径 ===================
+
+        // 确定 PromptMode（首轮锁定）
+        let prompt_mode = if selected_text.is_some() {
+            PromptMode::TextProcessing
+        } else {
+            PromptMode::QA
+        };
+
+        // 隐藏 overlay
+        hide_overlay_window(&app).await;
+
+        // 更新统计
+        if let Some(start_time) = recording_start_instant.lock().unwrap().take() {
+            let recording_ms = start_time.elapsed().as_millis() as u64;
+            let recognized_chars = user_instruction
+                .chars()
+                .filter(|c| !c.is_whitespace())
+                .count() as u64;
+            let mut stats = usage_stats.lock().unwrap();
+            if let Err(e) = stats.update_and_save(recording_ms, recognized_chars) {
+                tracing::error!("更新统计数据失败: {}", e);
+            }
+        }
+
+        // 调用 LLM（首轮：复用现有 process / process_with_context）
+        let _ = app.emit("post_processing", "assistant");
+        let llm_start = std::time::Instant::now();
+
+        let result = if let Some(ref text) = selected_text {
+            processor.process_with_context(&user_instruction, text).await
+        } else {
+            processor.process(&user_instruction).await
+        };
+
+        let llm_time_ms = llm_start.elapsed().as_millis() as u64;
+
+        match result {
+            Ok(response_text) => {
+                let turn = ConversationTurn {
+                    user_instruction: user_instruction.clone(),
+                    selected_text: selected_text.clone(),
+                    assistant_response: response_text,
+                    asr_time_ms,
+                    llm_time_ms,
+                };
+
+                let session_id = uuid::Uuid::new_v4().to_string();
+
+                // 创建 session 并存入 AppState
+                {
+                    let mut lock = state.conversation_session.lock().unwrap();
+                    // 安全清理：如果有旧会话未关闭，补发历史事件
+                    if let Some(old_session) = lock.take() {
+                        tracing::warn!(
+                            "AI 助手: 新会话覆盖了旧会话 (id={}), 补发完成事件",
+                            old_session.id
+                        );
+                        emit_conversation_history(&app, &old_session, false);
+                    }
+                    let session = ConversationSession {
+                        id: session_id.clone(),
+                        turns: vec![turn.clone()],
+                        system_prompt_mode: prompt_mode,
+                        target_hwnd,
+                        created_at: std::time::Instant::now(),
+                    };
+                    *lock = Some(session);
+                }
+
+                // 显示结果面板（居中定位，仅首轮）
+                show_result_panel_window(&app).await;
+                // 等待 WebView 激活后再发送事件
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+
+                // 发送 turn_complete 事件
+                let payload = TurnCompletePayload {
+                    session_id,
+                    turn: ConversationTurnPayload {
+                        user_instruction: turn.user_instruction,
+                        selected_text: turn.selected_text,
+                        has_selection: selected_text.is_some(),
+                        assistant_response: turn.assistant_response,
+                        asr_time_ms: turn.asr_time_ms,
+                        llm_time_ms: turn.llm_time_ms,
+                    },
+                    is_followup: false,
+                };
+                let _ = app.emit("assistant_turn_complete", payload);
+
+                tracing::info!(
+                    "AI 助手新会话创建完成 (ASR: {}ms, LLM: {}ms)",
+                    asr_time_ms,
+                    llm_time_ms
+                );
+            }
+            Err(e) => {
+                let _ = recording_start_instant.lock().unwrap().take();
+                tracing::error!("AI 助手处理失败: {}", e);
+                let _ = app.emit("error", format!("AI 助手处理失败: {}", e));
+            }
         }
     }
 }
@@ -3159,6 +3493,12 @@ async fn stop_app(app_handle: AppHandle) -> Result<String, String> {
     *state.qwen_client.lock().unwrap() = None;
     *state.sensevoice_client.lock().unwrap() = None;
     *state.doubao_client.lock().unwrap() = None;
+
+    // 清理 AI 助手会话状态并隐藏结果面板
+    state.conversation_session.lock().unwrap().take();
+    state.is_assistant_processing.store(false, Ordering::SeqCst);
+    hide_result_panel_window(&app_handle).await;
+
     *state.is_running.lock().unwrap() = false;
 
     Ok("应用已停止".to_string())
@@ -3815,6 +4155,256 @@ async fn dismiss_learning_suggestion(id: String) -> Result<(), String> {
     Ok(())
 }
 
+/// 粘贴 AI 助手最新回复到原窗口
+///
+/// 取出会话，检查目标窗口是否有效：
+/// - 有效：隐藏面板 → 恢复焦点 → Ctrl+V 粘贴 → 触发学习观察
+/// - 无效：复制到剪贴板（降级）
+/// 粘贴 = 会话结束
+#[tauri::command]
+async fn paste_latest_reply(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<String, String> {
+    let session = {
+        state.conversation_session.lock().unwrap().take()
+    }
+    .ok_or("无待处理的结果")?;
+
+    let last_turn = session.turns.last().ok_or("会话中无回复")?;
+    let result_text = last_turn.assistant_response.clone();
+    let has_selection = session
+        .turns
+        .first()
+        .map(|t| t.selected_text.is_some())
+        .unwrap_or(false);
+
+    // 检查目标窗口是否仍有效
+    if let Some(hwnd) = session.target_hwnd {
+        if win32_input::is_window_valid(hwnd) {
+            // 先隐藏面板窗口，等窗口管理器处理完毕
+            hide_result_panel_window(&app).await;
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+            // 恢复焦点到目标窗口
+            win32_input::restore_focus_with_verify(hwnd, 3);
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+            // 粘贴文本
+            clipboard_manager::insert_text_with_context(&result_text, has_selection, None)
+                .map_err(|e| format!("粘贴失败: {}", e))?;
+
+            // 触发学习观察
+            if let Ok((config, _)) = config::AppConfig::load() {
+                if config.learning_config.enabled {
+                    learning::coordinator::start_learning_observation(
+                        app.clone(),
+                        result_text.clone(),
+                        hwnd,
+                        config.learning_config,
+                    );
+                }
+            }
+
+            // 发送完成事件（粘贴 = 已插入）
+            emit_conversation_history(&app, &session, true);
+
+            return Ok("已粘贴".into());
+        }
+    }
+
+    // 降级：目标窗口无效，复制到剪贴板
+    clipboard_manager::copy_to_clipboard(&result_text)
+        .map_err(|e| format!("复制到剪贴板失败: {}", e))?;
+    hide_result_panel_window(&app).await;
+
+    emit_conversation_history(&app, &session, false);
+
+    Ok("原窗口已关闭，已复制到剪贴板".into())
+}
+
+/// 复制最新一轮 AI 回复到剪贴板（不结束会话）
+#[tauri::command]
+async fn copy_latest_reply(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let lock = state.conversation_session.lock().unwrap();
+    if let Some(ref session) = *lock {
+        if let Some(last_turn) = session.turns.last() {
+            clipboard_manager::copy_to_clipboard(&last_turn.assistant_response)
+                .map_err(|e| format!("复制到剪贴板失败: {}", e))?;
+        }
+    }
+    Ok(())
+}
+
+/// 复制整个对话到剪贴板（Markdown 格式，不结束会话）
+#[tauri::command]
+async fn copy_full_conversation(state: tauri::State<'_, AppState>) -> Result<(), String> {
+    let lock = state.conversation_session.lock().unwrap();
+    if let Some(ref session) = *lock {
+        let formatted = assistant_processor::format_conversation_for_copy(&session.turns);
+        clipboard_manager::copy_to_clipboard(&formatted)
+            .map_err(|e| format!("复制到剪贴板失败: {}", e))?;
+    }
+    Ok(())
+}
+
+/// 获取当前会话完整状态（供前端 pull 模式使用）
+///
+/// 窗口从 hidden→visible 后，前端可能错过 push 事件。
+/// 此命令让前端主动拉取最新会话状态。
+#[tauri::command]
+async fn get_conversation_state(
+    state: tauri::State<'_, AppState>,
+) -> Result<Option<ConversationStatePayload>, String> {
+    let lock = state.conversation_session.lock().unwrap();
+    Ok(lock.as_ref().map(|session| ConversationStatePayload {
+        session_id: session.id.clone(),
+        turns: session
+            .turns
+            .iter()
+            .map(|t| ConversationTurnPayload {
+                user_instruction: t.user_instruction.clone(),
+                selected_text: t.selected_text.clone(),
+                has_selection: t.selected_text.is_some(),
+                assistant_response: t.assistant_response.clone(),
+                asr_time_ms: t.asr_time_ms,
+                llm_time_ms: t.llm_time_ms,
+            })
+            .collect(),
+    }))
+}
+
+/// 关闭结果面板并结束当前对话会话
+///
+/// 补发 `transcription_complete` 事件（inserted=false），
+/// 确保历史记录能记录到这次 AI 助手交互。
+#[tauri::command]
+async fn dismiss_conversation(
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    if let Some(session) = state.conversation_session.lock().unwrap().take() {
+        emit_conversation_history(&app, &session, false);
+    }
+    hide_result_panel_window(&app).await;
+    Ok(())
+}
+
+/// 文本追问：接收用户键入的文本，跳过录音/ASR/TNL，直接调用 LLM 追问
+///
+/// 仅在面板已打开（有活跃会话）时可用。与语音追问共享 `is_assistant_processing`
+/// 并发保护，同一时刻只能有一个在执行。
+#[tauri::command]
+async fn send_text_question(
+    text: String,
+    app: AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<(), String> {
+    let text = text.trim().to_string();
+    if text.is_empty() {
+        return Err("输入内容不能为空".into());
+    }
+
+    // 1. 读取会话状态（面板打开 = 有会话）
+    let session_info = {
+        let lock = state.conversation_session.lock().unwrap();
+        lock.as_ref()
+            .map(|s| (s.id.clone(), s.turns.clone(), s.system_prompt_mode.clone()))
+    };
+    let Some((session_id, history, prompt_mode)) = session_info else {
+        return Err("当前没有活跃的对话会话".into());
+    };
+
+    // 2. 获取 processor
+    let processor = { state.assistant_processor.lock().unwrap().clone() };
+    let Some(processor) = processor else {
+        return Err("AI 助手未配置".into());
+    };
+
+    // 3. 并发保护：CAS(false→true)
+    if state
+        .is_assistant_processing
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        return Err("正在处理中，请稍候".into());
+    }
+
+    // 4. 发 pending 事件（前端立即显示用户消息 + loading）
+    let pending_payload = TurnPendingPayload {
+        user_instruction: text.clone(),
+        selected_text: None,
+        has_selection: false,
+    };
+    let _ = app.emit("assistant_turn_pending", pending_payload);
+
+    // 5. 调用 LLM（追问模式，asr_time_ms = 0）
+    let llm_start = std::time::Instant::now();
+
+    let result = processor
+        .process_followup(&history, &text, None, &prompt_mode)
+        .await;
+
+    let llm_time_ms = llm_start.elapsed().as_millis() as u64;
+
+    match result {
+        Ok(response_text) => {
+            let turn = ConversationTurn {
+                user_instruction: text,
+                selected_text: None,
+                assistant_response: response_text,
+                asr_time_ms: 0,
+                llm_time_ms,
+            };
+
+            // 推入 session
+            {
+                let mut lock = state.conversation_session.lock().unwrap();
+                if let Some(ref mut session) = *lock {
+                    session.turns.push(turn.clone());
+                } else {
+                    // 用户在处理期间关闭了面板，丢弃结果
+                    tracing::warn!("AI 助手: 文本追问完成但会话已关闭，丢弃结果");
+                    state
+                        .is_assistant_processing
+                        .store(false, Ordering::SeqCst);
+                    return Ok(());
+                }
+            }
+
+            // 发送 turn_complete 事件
+            let payload = TurnCompletePayload {
+                session_id,
+                turn: ConversationTurnPayload {
+                    user_instruction: turn.user_instruction,
+                    selected_text: turn.selected_text,
+                    has_selection: false,
+                    assistant_response: turn.assistant_response,
+                    asr_time_ms: 0,
+                    llm_time_ms: turn.llm_time_ms,
+                },
+                is_followup: true,
+            };
+            let _ = app.emit("assistant_turn_complete", payload);
+            tracing::info!("AI 助手文本追问完成 (LLM: {}ms)", llm_time_ms);
+        }
+        Err(e) => {
+            let error_payload = TurnErrorPayload {
+                session_id,
+                error_message: format!("{}", e),
+            };
+            let _ = app.emit("assistant_turn_error", error_payload);
+            tracing::error!("AI 助手文本追问失败: {}", e);
+        }
+    }
+
+    state
+        .is_assistant_processing
+        .store(false, Ordering::SeqCst);
+
+    Ok(())
+}
+
 /// 显示通知窗口并定位到鼠标所在屏幕的悬浮窗上方
 #[tauri::command]
 async fn show_notification_window(app_handle: AppHandle) -> Result<(), String> {
@@ -3863,6 +4453,59 @@ async fn show_notification_window(app_handle: AppHandle) -> Result<(), String> {
         Ok(())
     } else {
         Err("通知窗口不存在".to_string())
+    }
+}
+
+/// 显示结果面板窗口（居中于鼠标所在屏幕）
+///
+/// 与 show_notification_window 不同：结果面板需要 set_focus，因为用户需要交互。
+async fn show_result_panel_window(app: &AppHandle) {
+    tracing::info!("[ResultPanel] show_result_panel_window 被调用");
+    if let Some(panel) = app.get_webview_window("result_panel") {
+        // 使用 overlay 或 main 窗口获取显示器列表（result_panel 首次显示前可能未初始化）
+        let reference_window = app
+            .get_webview_window("overlay")
+            .or_else(|| app.get_webview_window("main"));
+
+        if let Some(ref_win) = reference_window {
+            if let Some(monitor) = find_monitor_at_cursor(&ref_win) {
+                let monitor_pos = monitor.position();
+                let screen_size = monitor.size();
+                let scale_factor = monitor.scale_factor();
+
+                // 结果面板逻辑尺寸（与 tauri.conf.json 一致）
+                let window_width = (520.0 * scale_factor) as i32;
+                let window_height = (620.0 * scale_factor) as i32;
+
+                // 屏幕居中
+                let x = monitor_pos.x + (screen_size.width as i32 - window_width) / 2;
+                let y = monitor_pos.y + (screen_size.height as i32 - window_height) / 2;
+
+                if let Err(e) = panel.set_position(tauri::PhysicalPosition::new(x, y)) {
+                    tracing::warn!("设置结果面板窗口位置失败: {}", e);
+                }
+            }
+        }
+
+        match panel.show() {
+            Ok(()) => tracing::info!("[ResultPanel] panel.show() 成功"),
+            Err(e) => tracing::error!("[ResultPanel] panel.show() 失败: {}", e),
+        }
+        match panel.set_focus() {
+            Ok(()) => tracing::info!("[ResultPanel] panel.set_focus() 成功"),
+            Err(e) => tracing::warn!("[ResultPanel] panel.set_focus() 失败: {}", e),
+        }
+    } else {
+        tracing::error!("[ResultPanel] 结果面板窗口不存在 (get_webview_window 返回 None)");
+    }
+}
+
+/// 隐藏结果面板窗口
+async fn hide_result_panel_window(app: &AppHandle) {
+    if let Some(panel) = app.get_webview_window("result_panel") {
+        if let Err(e) = panel.hide() {
+            tracing::error!("隐藏结果面板窗口失败: {}", e);
+        }
     }
 }
 
@@ -3988,6 +4631,8 @@ pub fn run() {
                 recording_start_instant: Arc::new(Mutex::new(None)),
                 builtin_hotwords_raw: Arc::clone(&builtin_hotwords_raw),
                 builtin_dictionary_updater_started: Arc::clone(&builtin_dictionary_updater_started),
+                conversation_session: Arc::new(Mutex::new(None)),
+                is_assistant_processing: Arc::new(AtomicBool::new(false)),
             };
 
             let initial_config = load_persisted_config().unwrap_or_else(|e| {
@@ -4256,6 +4901,12 @@ pub fn run() {
             get_dictionary_entries,
             delete_dictionary_entries,
             dismiss_learning_suggestion,
+            get_conversation_state,
+            paste_latest_reply,
+            copy_latest_reply,
+            copy_full_conversation,
+            dismiss_conversation,
+            send_text_question,
             show_notification_window,
             test_llm_provider,
         ])

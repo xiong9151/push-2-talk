@@ -1,9 +1,10 @@
 // AI 助手模式处理管道
 //
 // 处理流程：
-// 1. 如果有选中文本：上下文 + 语音指令 → ASR → AssistantProcessor (文本处理模式) → 自动插入（替换选中）
-// 2. 如果无选中文本：语音指令 → ASR → AssistantProcessor (问答模式) → 自动插入
+// 1. 如果有选中文本：上下文 + 语音指令 → ASR → AssistantProcessor (文本处理模式) → 返回结果
+// 2. 如果无选中文本：语音指令 → ASR → AssistantProcessor (问答模式) → 返回结果
 //
+// 不自动插入文本，由调用方通过结果面板（ResultPanelWindow）展示给用户。
 // 使用独立的 AssistantProcessor，支持双系统提示词
 
 use anyhow::Result;
@@ -12,9 +13,7 @@ use tauri::{AppHandle, Emitter};
 
 use super::types::{PipelineResult, TranscriptionContext, TranscriptionMode};
 use crate::assistant_processor::AssistantProcessor;
-use crate::clipboard_manager::{insert_text_with_context, ClipboardGuard};
 use crate::config::AppConfig;
-use crate::learning::coordinator::start_learning_observation;
 use crate::tnl::TnlEngine;
 
 /// AI 助手模式处理管道
@@ -23,10 +22,14 @@ use crate::tnl::TnlEngine;
 /// 1. 接收 ASR 转写的用户指令
 /// 2. 根据是否有选中文本选择合适的系统提示词
 /// 3. 调用 AssistantProcessor 进行处理
-/// 4. 将回答自动插入到当前光标位置（替换选中或插入）
-/// 5. 恢复原始剪贴板
+/// 4. 返回结果（不自动插入，由调用方通过结果面板展示）
+///
+/// 注意：多轮对话改造后，此管道仅由测试使用。
+/// 生产代码的 LLM 调用已内联到 `handle_assistant_mode()`。
+#[allow(dead_code)]
 pub struct AssistantPipeline;
 
+#[allow(dead_code)]
 impl AssistantPipeline {
     /// 创建 AI 助手模式管道
     pub fn new() -> Self {
@@ -38,25 +41,21 @@ impl AssistantPipeline {
     /// # Arguments
     /// * `app` - Tauri 应用句柄（用于发送事件）
     /// * `processor` - AI 助手处理器（调用方负责从锁中获取）
-    /// * `clipboard_guard` - 剪贴板守卫（用于恢复）
     /// * `asr_result` - ASR 转录结果（用户的语音指令）
     /// * `asr_time_ms` - ASR 耗时（毫秒）
     /// * `context` - 上下文信息（包含选中文本）
-    /// * `target_hwnd` - 目标窗口句柄（用于焦点恢复）
     /// * `dictionary` - 当前词库（用于 TNL 技术词规范化）
     ///
     /// # Returns
-    /// * `Ok(PipelineResult)` - 处理成功
+    /// * `Ok(PipelineResult)` - 处理成功（不自动插入，`inserted` 为 false）
     /// * `Err(e)` - 处理失败
     pub async fn process(
         &self,
         app: &AppHandle,
         processor: Option<AssistantProcessor>,
-        clipboard_guard: Option<ClipboardGuard>,
         asr_result: Result<String>,
         asr_time_ms: u64,
         context: TranscriptionContext,
-        target_hwnd: Option<isize>, // 目标窗口句柄（用于焦点恢复）
         dictionary: Vec<String>,
     ) -> Result<PipelineResult> {
         // 1. 解包 ASR 结果（用户指令）
@@ -122,31 +121,7 @@ impl AssistantPipeline {
             llm_time_ms
         );
 
-        // 6. 插入前隐藏窗口并主动恢复焦点到目标应用
-        // 使用新的焦点恢复机制，确保文本插入到正确的窗口
-        super::focus::hide_overlay_and_restore_focus(app, target_hwnd).await;
-
-        // 7. 插入结果（替换选中或插入at 光标）
-        let has_selection = context.selected_text.is_some();
-        let inserted = Self::insert_result(&result, has_selection, clipboard_guard);
-
-        // 8. 触发学习观察（如果启用且插入成功）
-        if inserted {
-            if let Some(hwnd) = target_hwnd {
-                if let Ok((config, _)) = AppConfig::load() {
-                    if config.learning_config.enabled {
-                        start_learning_observation(
-                            app.clone(),
-                            result.clone(),
-                            hwnd,
-                            config.learning_config,
-                        );
-                    }
-                }
-            }
-        }
-
-        // 9. 返回结果
+        // 6. 返回结果（不自动插入，由调用方通过结果面板展示给用户）
         Ok(PipelineResult::success(
             result,
             Some(asr_instruction), // 历史记录存储 ASR 原文
@@ -154,26 +129,12 @@ impl AssistantPipeline {
             asr_time_ms,
             Some(llm_time_ms),
             TranscriptionMode::Assistant,
-            inserted,
+            false, // 不在 pipeline 内插入，由结果面板的粘贴操作完成
         ))
     }
 
     fn build_tnl_engine(dictionary: Vec<String>) -> TnlEngine {
         TnlEngine::new(dictionary)
-    }
-
-    /// 插入文本到当前光标位置
-    fn insert_result(text: &str, has_selection: bool, guard: Option<ClipboardGuard>) -> bool {
-        match insert_text_with_context(text, has_selection, guard) {
-            Ok(()) => {
-                tracing::info!("AssistantPipeline: 结果已插入");
-                true
-            }
-            Err(e) => {
-                tracing::error!("AssistantPipeline: 插入失败: {}", e);
-                false
-            }
-        }
     }
 }
 
