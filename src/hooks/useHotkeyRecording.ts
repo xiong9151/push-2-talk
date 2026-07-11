@@ -122,6 +122,14 @@ export function useHotkeyRecording({
         };
       }
 
+      // 确保 mode 字段被保留（兼容新的 HotkeyConfig 类型）
+      if (!nextDualHotkeyConfig.dictation.mode) {
+        nextDualHotkeyConfig.dictation.mode = 'press';
+      }
+      if (!nextDualHotkeyConfig.assistant.mode) {
+        nextDualHotkeyConfig.assistant.mode = 'press';
+      }
+
       setDualHotkeyConfig(nextDualHotkeyConfig);
       setHotkeyError(null);
 

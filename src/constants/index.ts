@@ -133,9 +133,10 @@ export const ASR_PROVIDERS: Record<AsrProvider, AsrProviderMeta> = {
 export const DEFAULT_DUAL_HOTKEY_CONFIG = {
   dictation: {
     keys: ['control_left', 'meta_left'] as HotkeyKey[],
+    mode: 'press' as HotkeyMode,
     release_mode_keys: ['f2'] as HotkeyKey[],
   },
-  assistant: { keys: ['alt_left', 'space'] as HotkeyKey[] }
+  assistant: { keys: ['alt_left', 'space'] as HotkeyKey[], mode: 'press' as HotkeyMode }
 };
 
 // Key 缺失时自动回退的 ASR Provider

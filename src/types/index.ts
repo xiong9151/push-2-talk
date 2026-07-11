@@ -13,8 +13,11 @@ export type HotkeyKey =
   | 'up' | 'down' | 'left' | 'right'
   | 'return' | 'backspace' | 'delete' | 'insert' | 'home' | 'end' | 'page_up' | 'page_down';
 
+export type HotkeyMode = "press" | "release" | "toggle";
+
 export interface HotkeyConfig {
   keys: HotkeyKey[];
+  mode?: HotkeyMode;  // 热键触发模式，默认为 press
   enable_release_lock?: boolean;  // 已弃用，保留用于向后兼容
   release_mode_keys?: HotkeyKey[];  // 松手模式独立快捷键
 }
