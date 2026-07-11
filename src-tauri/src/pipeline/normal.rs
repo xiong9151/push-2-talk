@@ -11,7 +11,6 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
 use super::types::{PipelineResult, TranscriptionContext, TranscriptionMode};
-use crate::config::AppConfig;
 use crate::learning::coordinator::start_learning_observation;
 use crate::llm_post_processor::LlmPostProcessor;
 use crate::text_inserter::TextInserter;
@@ -60,6 +59,7 @@ impl NormalPipeline {
         asr_time_ms: u64,
         _context: TranscriptionContext, // 普通模式不使用上下文
         target_hwnd: Option<isize>,     // 目标窗口句柄（用于焦点恢复）
+        tnl_enabled: bool,
     ) -> Result<PipelineResult> {
         // 1. 解包 ASR 结果
         let asr_text = asr_result?;
@@ -71,11 +71,6 @@ impl NormalPipeline {
 
         // 2. TNL 技术规范化（如果启用）
         let (text, tnl_changed, tnl_diagnostics) = {
-            // 从配置加载 TNL 开关
-            let tnl_enabled = AppConfig::load()
-                .map(|(c, _)| c.tnl_config.enabled)
-                .unwrap_or(true);
-
             if tnl_enabled {
                 let engine = TnlEngine::new(dictionary.clone());
                 let tnl_result = engine.normalize(&asr_text);

@@ -414,14 +414,12 @@ impl StreamingRecorder {
 
         tracing::info!("停止流式录音...");
 
-        // 先等待音频回调完成当前数据写入（stream 还在运行）
-        std::thread::sleep(std::time::Duration::from_millis(200));
-
-        // 停止录音标志
+        // 通知音频回调停止（回调在独立音频线程，需先让回调感知）
         *self.is_recording.lock().unwrap_or_else(|e| e.into_inner()) = false;
 
-        // 再等待一小段时间确保最后的数据被写入
-        std::thread::sleep(std::time::Duration::from_millis(100));
+        // 等待音频线程完成最后一次数据写入（不依赖固定 sleep）
+        // 回调周期 ~0.2s，500ms 远超最坏情况
+        std::thread::sleep(std::time::Duration::from_millis(500));
 
         // 最后 drop stream
         self.stream = None;

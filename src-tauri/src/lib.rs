@@ -3387,6 +3387,11 @@ async fn handle_transcription_result(
     let enable_post_process = { *state.enable_post_process.lock().unwrap_or_else(|e| e.into_inner()) };
     let enable_dictionary_enhancement = { *state.enable_dictionary_enhancement.lock().unwrap_or_else(|e| e.into_inner()) };
 
+    // 读取 TNL 开关（避免 pipeline 内做同步文件 I/O）
+    let tnl_enabled = AppConfig::load()
+        .map(|(c, _)| c.tnl_config.enabled)
+        .unwrap_or(true);
+
     // 听写模式：只使用 NormalPipeline
     let pipeline = NormalPipeline::new();
     let mut inserter = { text_inserter.lock().unwrap_or_else(|e| e.into_inner()).take() };
@@ -3402,6 +3407,7 @@ async fn handle_transcription_result(
             asr_time_ms,
             TranscriptionContext::empty(),
             target_hwnd,
+            tnl_enabled,
         )
         .await;
     // 归还 text_inserter
