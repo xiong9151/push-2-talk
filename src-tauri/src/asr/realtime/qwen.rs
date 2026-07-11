@@ -355,16 +355,8 @@ impl ConnectionPool {
                         break;
                     }
 
-                    // 实时模式下删除所有标点符号
-                    let punctuation = [
-                        '。', '，', '！', '？', '、', '；', '：', '"', '"', '.', ',', '!', '?',
-                        ';', ':', '"', '\'', '（', '）', '(', ')', '【', '】', '[', ']', '《',
-                        '》', '<', '>', '—', '…', '·', '\u{2018}', '\u{2019}',
-                    ]; // 中文单引号 ' '
-                    final_text = final_text
-                        .chars()
-                        .filter(|c| !punctuation.contains(c))
-                        .collect();
+                    // 实时模式下仅删除尾部标点符号（与 HTTP 模式一致）
+                    crate::asr::utils::strip_trailing_punctuation(&mut final_text);
 
                     let _ = result_tx.send(Ok(final_text.clone())).await;
                     break;
