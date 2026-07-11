@@ -1,4 +1,4 @@
-import type { HotkeyKey, LlmPreset, LlmConfig, AssistantConfig, AsrProvider, AsrProviderMeta, LearningConfig, SharedLlmConfig } from '../types';
+import type { HotkeyKey, HotkeyMode, LlmPreset, LlmConfig, AssistantConfig, AsrProvider, AsrProviderMeta, LearningConfig, SharedLlmConfig } from '../types';
 
 // 按键显示名称映射
 export const KEY_DISPLAY_NAMES: Record<HotkeyKey, string> = {
