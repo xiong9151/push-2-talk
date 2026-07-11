@@ -88,7 +88,7 @@ pub fn start_learning_observation(
     // 取消同一窗口的旧观察任务（优雅取消：发送信号让旧任务提前结束观察期）
     // 旧任务会继续执行 diff/LLM 流程，不会丢失学习机会
     {
-        let mut active = ACTIVE_OBSERVATIONS.lock().unwrap();
+        let mut active = ACTIVE_OBSERVATIONS.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(old_cancel_flag) = active.remove(&target_hwnd) {
             tracing::info!(
                 "Learning: 优雅取消旧观察任务 [hwnd={}]（旧任务将继续完成学习流程）",
@@ -110,7 +110,7 @@ pub fn start_learning_observation(
         }
         impl Drop for CleanupGuard {
             fn drop(&mut self) {
-                let mut active = ACTIVE_OBSERVATIONS.lock().unwrap();
+                let mut active = ACTIVE_OBSERVATIONS.lock().unwrap_or_else(|e| e.into_inner());
                 if active.remove(&self.hwnd).is_some() {
                     tracing::debug!("Learning: 任务完成，已从活跃观察中移除 hwnd={}", self.hwnd);
                 }
@@ -390,7 +390,7 @@ pub fn start_learning_observation(
 
     // 保存新任务的取消标志
     {
-        let mut active = ACTIVE_OBSERVATIONS.lock().unwrap();
+        let mut active = ACTIVE_OBSERVATIONS.lock().unwrap_or_else(|e| e.into_inner());
         active.insert(target_hwnd, cancel_flag);
     }
 
@@ -647,9 +647,9 @@ fn is_single_letter_noise(original: &str, corrected: &str) -> bool {
 
     // 如果修正后是单个 ASCII 字母（且原文也是单个 ASCII 字母或为空），则视为噪声
     // 使用 is_ascii_alphabetic() 而非 is_alphabetic()，避免错误过滤中文单字修正
-    if corr_char_count == 1 && corr_trimmed.chars().next().unwrap().is_ascii_alphabetic() {
+    if corr_char_count == 1 && corr_trimmed.chars().next().expect("string should not be empty").is_ascii_alphabetic() {
         if orig_trimmed.is_empty()
-            || (orig_char_count == 1 && orig_trimmed.chars().next().unwrap().is_ascii_alphabetic())
+            || (orig_char_count == 1 && orig_trimmed.chars().next().expect("string should not be empty").is_ascii_alphabetic())
         {
             return true;
         }

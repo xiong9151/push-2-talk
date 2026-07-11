@@ -753,7 +753,7 @@ mod implementation {
                 self.credentials = Some(creds);
             }
 
-            Ok(self.credentials.as_ref().unwrap())
+            Ok(self.credentials.as_ref().expect("credentials should be initialized"))
         }
 
         pub fn credentials(&self) -> Option<&DeviceCredentials> {
@@ -1107,7 +1107,7 @@ mod implementation {
                 creds.token = get_asr_token(&self.client, &creds.device_id, &creds.cdid).await?;
                 self.credentials = Some(creds);
             }
-            Ok(self.credentials.as_ref().unwrap())
+            Ok(self.credentials.as_ref().expect("credentials should be initialized"))
         }
 
         pub async fn transcribe_wav(&mut self, wav_path: &std::path::Path) -> Result<String> {

@@ -49,7 +49,8 @@ tmpclaude-*
 # OpenSpec
 .openspec/
 
-# Docs (plans and drafts)
+# MCP data (mimo)
+data/
 docs/
 .ccg/
 

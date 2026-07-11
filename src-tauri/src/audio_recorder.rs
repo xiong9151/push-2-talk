@@ -82,8 +82,8 @@ impl AudioRecorder {
         tracing::info!("开始录音...");
 
         // 清空之前的音频数据
-        self.audio_data.lock().unwrap().clear();
-        *self.is_recording.lock().unwrap() = true;
+        self.audio_data.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        *self.is_recording.lock().unwrap_or_else(|e| e.into_inner()) = true;
 
         let host = cpal::default_host();
         let device = host
@@ -127,13 +127,13 @@ impl AudioRecorder {
                 device.build_input_stream(
                     &config,
                     move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                        if *is_recording.lock().unwrap() {
-                            let mut buffer = audio_data.lock().unwrap();
+                        if *is_recording.lock().unwrap_or_else(|e| e.into_inner()) {
+                            let mut buffer = audio_data.lock().unwrap_or_else(|e| e.into_inner());
                             buffer.extend_from_slice(data);
 
                             // 基于时间的音频级别发送（目标 ~30Hz，每 33ms 发送一次）
                             if let Some(ref app) = app_handle_f32 {
-                                let mut last_emit = last_emit_time_f32.lock().unwrap();
+                                let mut last_emit = last_emit_time_f32.lock().unwrap_or_else(|e| e.into_inner());
                                 if last_emit.elapsed().as_millis() >= 33 {
                                     let level = calculate_audio_level(data);
                                     emit_audio_level(app, level);
@@ -154,8 +154,8 @@ impl AudioRecorder {
                 device.build_input_stream(
                     &config,
                     move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                        if *is_recording_i16.lock().unwrap() {
-                            let mut buffer = audio_data_i16.lock().unwrap();
+                        if *is_recording_i16.lock().unwrap_or_else(|e| e.into_inner()) {
+                            let mut buffer = audio_data_i16.lock().unwrap_or_else(|e| e.into_inner());
                             // 转换 i16 到 f32
                             let f32_data: Vec<f32> =
                                 data.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
@@ -163,7 +163,7 @@ impl AudioRecorder {
 
                             // 基于时间的音频级别发送（目标 ~30Hz）
                             if let Some(ref app) = app_handle_i16 {
-                                let mut last_emit = last_emit_time_i16.lock().unwrap();
+                                let mut last_emit = last_emit_time_i16.lock().unwrap_or_else(|e| e.into_inner());
                                 if last_emit.elapsed().as_millis() >= 33 {
                                     let level = calculate_audio_level(&f32_data);
                                     emit_audio_level(app, level);
@@ -184,8 +184,8 @@ impl AudioRecorder {
                 device.build_input_stream(
                     &config,
                     move |data: &[u16], _: &cpal::InputCallbackInfo| {
-                        if *is_recording_u16.lock().unwrap() {
-                            let mut buffer = audio_data_u16.lock().unwrap();
+                        if *is_recording_u16.lock().unwrap_or_else(|e| e.into_inner()) {
+                            let mut buffer = audio_data_u16.lock().unwrap_or_else(|e| e.into_inner());
                             // 转换 u16 到 f32
                             let f32_data: Vec<f32> = data
                                 .iter()
@@ -195,7 +195,7 @@ impl AudioRecorder {
 
                             // 基于时间的音频级别发送（目标 ~30Hz）
                             if let Some(ref app) = app_handle_u16 {
-                                let mut last_emit = last_emit_time_u16.lock().unwrap();
+                                let mut last_emit = last_emit_time_u16.lock().unwrap_or_else(|e| e.into_inner());
                                 if last_emit.elapsed().as_millis() >= 33 {
                                     let level = calculate_audio_level(&f32_data);
                                     emit_audio_level(app, level);
@@ -224,7 +224,7 @@ impl AudioRecorder {
         tracing::info!("停止录音...");
 
         // 停止录音
-        *self.is_recording.lock().unwrap() = false;
+        *self.is_recording.lock().unwrap_or_else(|e| e.into_inner()) = false;
 
         // Drop stream，停止音频流
         self.stream = None;
@@ -232,7 +232,7 @@ impl AudioRecorder {
         // 等待一小段时间确保所有数据都已写入
         std::thread::sleep(std::time::Duration::from_millis(100));
 
-        let raw_audio = self.audio_data.lock().unwrap().clone();
+        let raw_audio = self.audio_data.lock().unwrap_or_else(|e| e.into_inner()).clone();
         let original_len = raw_audio.len();
 
         // 1. 转换为单声道
@@ -294,7 +294,7 @@ impl AudioRecorder {
         tracing::info!("停止录音...");
 
         // 停止录音
-        *self.is_recording.lock().unwrap() = false;
+        *self.is_recording.lock().unwrap_or_else(|e| e.into_inner()) = false;
 
         // Drop stream，停止音频流
         self.stream = None;
@@ -302,7 +302,7 @@ impl AudioRecorder {
         // 等待一小段时间确保所有数据都已写入
         std::thread::sleep(std::time::Duration::from_millis(100));
 
-        let raw_audio = self.audio_data.lock().unwrap().clone();
+        let raw_audio = self.audio_data.lock().unwrap_or_else(|e| e.into_inner()).clone();
 
         // 1. 转换为单声道
         let mono_audio = self.to_mono(&raw_audio, self.channels);
@@ -351,7 +351,7 @@ impl AudioRecorder {
 
     /// 检查是否正在录音
     pub fn is_recording(&self) -> bool {
-        *self.is_recording.lock().unwrap()
+        *self.is_recording.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
 

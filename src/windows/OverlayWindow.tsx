@@ -216,7 +216,7 @@ export default function OverlayWindow() {
   const { level: audioLevel, time: animationTime } = useSmoothAudioLevel(status === "recording");
 
   useEffect(() => {
-    invoke<AppConfig>("get_config").then(config => {
+    invoke<AppConfig>("load_config").then(config => {
       setTheme(config.theme || "light");
     }).catch(console.error);
   }, []);

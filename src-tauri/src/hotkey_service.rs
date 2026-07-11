@@ -344,8 +344,8 @@ impl HotkeyService {
                 loop {
                     thread::sleep(Duration::from_millis(HOTKEY_POLL_INTERVAL_MS));
 
-                    let dictation_cfg = dictation_config.read().unwrap().clone();
-                    let assistant_cfg = assistant_config.read().unwrap().clone();
+                    let dictation_cfg = dictation_config.read().unwrap_or_else(|e| e.into_inner()).clone();
+                    let assistant_cfg = assistant_config.read().unwrap_or_else(|e| e.into_inner()).clone();
 
                     let dictation_down = is_hotkey_pressed_strict(&dictation_cfg.keys);
                     let assistant_down = is_hotkey_pressed_strict(&assistant_cfg.keys);
@@ -371,7 +371,7 @@ impl HotkeyService {
 
                     // 更新 pressed_keys（仅用于调试信息）
                     {
-                        let mut s = state.lock().unwrap();
+                        let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                         s.pressed_keys.clear();
 
                         // 只追踪当前配置相关的按键，避免无意义的全键盘扫描
@@ -399,7 +399,7 @@ impl HotkeyService {
                     let mut stop_action: Option<(TriggerMode, bool)> = None;
 
                     {
-                        let mut s = state.lock().unwrap();
+                        let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
 
                         // === 松手模式：再次按下松手模式快捷键则取消录音 ===
                         if s.is_recording && s.is_release_mode_triggered && release_rise {
@@ -494,12 +494,12 @@ impl HotkeyService {
                     }
 
                     if let Some((mode, is_release_mode)) = start_action {
-                        if let Some(cb) = on_start.read().unwrap().as_ref() {
+                        if let Some(cb) = on_start.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
                             cb(mode, is_release_mode);
                         }
                     }
                     if let Some((mode, is_release_mode)) = stop_action {
-                        if let Some(cb) = on_stop.read().unwrap().as_ref() {
+                        if let Some(cb) = on_stop.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
                             cb(mode, is_release_mode);
                         }
                     }
@@ -538,9 +538,9 @@ impl HotkeyService {
                     match event.event_type {
                         EventType::KeyPress(key) => {
                             if let Some(hotkey_key) = Self::rdev_to_hotkey_key(key) {
-                                let dictation_cfg = dictation_config_inner.read().unwrap().clone();
-                                let assistant_cfg = assistant_config_inner.read().unwrap().clone();
-                                let mut s = state_inner.lock().unwrap();
+                                let dictation_cfg = dictation_config_inner.read().unwrap_or_else(|e| e.into_inner()).clone();
+                                let assistant_cfg = assistant_config_inner.read().unwrap_or_else(|e| e.into_inner()).clone();
+                                let mut s = state_inner.lock().unwrap_or_else(|e| e.into_inner());
 
                                 s.pressed_keys.insert(hotkey_key);
 
@@ -606,7 +606,7 @@ impl HotkeyService {
                                     s.is_release_mode_triggered = false;
                                     drop(s);
                                     // 调用 on_stop 回调（传递 true 表示是松手模式取消）
-                                    if let Some(cb) = on_stop_inner.read().unwrap().as_ref() {
+                                    if let Some(cb) = on_stop_inner.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
                                         cb(TriggerMode::Dictation, true); // 松手模式取消
                                     }
                                     return;
@@ -644,7 +644,7 @@ impl HotkeyService {
                                         if s.watchdog_running {
                                             drop(s);
                                             if let Some(cb) =
-                                                on_start_inner.read().unwrap().as_ref()
+                                                on_start_inner.read().unwrap_or_else(|e| e.into_inner()).as_ref()
                                             {
                                                 cb(mode, is_release_mode); // 传递松手模式标志
                                             }
@@ -675,7 +675,7 @@ impl HotkeyService {
 
                                                 // 检查服务是否仍然激活
                                                 if !is_active_wd.load(Ordering::Relaxed) {
-                                                    let mut s = state_wd.lock().unwrap();
+                                                    let mut s = state_wd.lock().unwrap_or_else(|e| e.into_inner());
                                                     s.watchdog_running = false;
                                                     s.is_recording = false;
                                                     s.current_trigger_mode = None;
@@ -683,7 +683,7 @@ impl HotkeyService {
                                                     break;
                                                 }
 
-                                                let s = state_wd.lock().unwrap();
+                                                let s = state_wd.lock().unwrap_or_else(|e| e.into_inner());
                                                 if !s.watchdog_running || !s.is_recording {
                                                     tracing::debug!("看门狗线程正常退出");
                                                     break;
@@ -696,7 +696,7 @@ impl HotkeyService {
                                                     .current_trigger_mode
                                                 {
                                                     Some(TriggerMode::Dictation) => {
-                                                        let cfg = dictation_cfg_wd.read().unwrap();
+                                                        let cfg = dictation_cfg_wd.read().unwrap_or_else(|e| e.into_inner());
                                                         let soft_pressed = cfg
                                                             .keys
                                                             .iter()
@@ -704,7 +704,7 @@ impl HotkeyService {
                                                         (soft_pressed, cfg.keys.clone())
                                                     }
                                                     Some(TriggerMode::AiAssistant) => {
-                                                        let cfg = assistant_cfg_wd.read().unwrap();
+                                                        let cfg = assistant_cfg_wd.read().unwrap_or_else(|e| e.into_inner());
                                                         let soft_pressed = cfg
                                                             .keys
                                                             .iter()
@@ -729,7 +729,7 @@ impl HotkeyService {
                                                 if !truly_pressed {
                                                     release_detected_count += 1;
                                                     if release_detected_count >= required_count {
-                                                        let mut s = state_wd.lock().unwrap();
+                                                        let mut s = state_wd.lock().unwrap_or_else(|e| e.into_inner());
                                                         if s.is_recording {
                                                             // 检查是否为松手模式
                                                             if s.is_release_mode_triggered {
@@ -758,7 +758,7 @@ impl HotkeyService {
                                                                 tracing::warn!("看门狗检测到按键释放（硬件状态同步），强制停止录音");
                                                             }
                                                             if let Some(cb) =
-                                                                on_stop_wd.read().unwrap().as_ref()
+                                                                on_stop_wd.read().unwrap_or_else(|e| e.into_inner()).as_ref()
                                                             {
                                                                 cb(mode, false);
                                                                 // 传递 false（非松手模式）
@@ -771,11 +771,11 @@ impl HotkeyService {
                                                 }
                                             }
 
-                                            let mut s = state_wd.lock().unwrap();
+                                            let mut s = state_wd.lock().unwrap_or_else(|e| e.into_inner());
                                             s.watchdog_running = false;
                                         });
 
-                                        if let Some(cb) = on_start_inner.read().unwrap().as_ref() {
+                                        if let Some(cb) = on_start_inner.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
                                             cb(mode, is_release_mode); // 传递松手模式标志
                                         }
                                     }
@@ -784,9 +784,9 @@ impl HotkeyService {
                         }
                         EventType::KeyRelease(key) => {
                             if let Some(hotkey_key) = Self::rdev_to_hotkey_key(key) {
-                                let dictation_cfg = dictation_config_inner.read().unwrap().clone();
-                                let assistant_cfg = assistant_config_inner.read().unwrap().clone();
-                                let mut s = state_inner.lock().unwrap();
+                                let dictation_cfg = dictation_config_inner.read().unwrap_or_else(|e| e.into_inner()).clone();
+                                let assistant_cfg = assistant_config_inner.read().unwrap_or_else(|e| e.into_inner()).clone();
+                                let mut s = state_inner.lock().unwrap_or_else(|e| e.into_inner());
 
                                 s.pressed_keys.remove(&hotkey_key);
 
@@ -840,7 +840,7 @@ impl HotkeyService {
                                     drop(s);
 
                                     tracing::info!("检测到快捷键释放，停止录音");
-                                    if let Some(cb) = on_stop_inner.read().unwrap().as_ref() {
+                                    if let Some(cb) = on_stop_inner.read().unwrap_or_else(|e| e.into_inner()).as_ref() {
                                         cb(mode, false); // 释放时不是松手模式
                                     }
                                 }
@@ -865,7 +865,7 @@ impl HotkeyService {
 
                 // 重启前重置状态，防止按键卡死
                 {
-                    let mut s = state.lock().unwrap();
+                    let mut s = state.lock().unwrap_or_else(|e| e.into_inner());
                     s.pressed_keys.clear();
                     s.is_recording = false;
                     s.watchdog_running = false;
@@ -907,16 +907,16 @@ impl HotkeyService {
         );
 
         // 更新配置
-        *self.dictation_config.write().unwrap() = config.dictation;
-        *self.assistant_config.write().unwrap() = config.assistant;
+        *self.dictation_config.write().unwrap_or_else(|e| e.into_inner()) = config.dictation;
+        *self.assistant_config.write().unwrap_or_else(|e| e.into_inner()) = config.assistant;
 
         // 更新回调
-        *self.on_start.write().unwrap() = Some(Arc::new(on_start));
-        *self.on_stop.write().unwrap() = Some(Arc::new(on_stop));
+        *self.on_start.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(on_start));
+        *self.on_stop.write().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(on_stop));
 
         // 重置状态
         {
-            let mut s = self.state.lock().unwrap();
+            let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
             s.is_recording = false;
             s.pressed_keys.clear();
             s.watchdog_running = false;
@@ -938,7 +938,7 @@ impl HotkeyService {
         self.is_active.store(false, Ordering::SeqCst);
 
         // 重置状态
-        let mut s = self.state.lock().unwrap();
+        let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         s.is_recording = false;
         s.pressed_keys.clear();
         s.watchdog_running = false;
@@ -947,7 +947,7 @@ impl HotkeyService {
 
     /// 强制重置热键状态（用于手动修复状态卡死问题）
     pub fn reset_state(&self) {
-        let mut s = self.state.lock().unwrap();
+        let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         tracing::info!(
             "强制重置热键状态。清理前按键: {:?}, is_recording: {}",
             s.pressed_keys,
@@ -961,9 +961,9 @@ impl HotkeyService {
 
     /// 获取当前状态信息（用于调试）
     pub fn get_debug_info(&self) -> String {
-        let s = self.state.lock().unwrap();
-        let dictation_cfg = self.dictation_config.read().unwrap();
-        let assistant_cfg = self.assistant_config.read().unwrap();
+        let s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        let dictation_cfg = self.dictation_config.read().unwrap_or_else(|e| e.into_inner());
+        let assistant_cfg = self.assistant_config.read().unwrap_or_else(|e| e.into_inner());
         format!(
             "is_active: {}, is_recording: {}, pressed_keys: {:?}, trigger_mode: {:?}, dictation_hotkey: {}, assistant_hotkey: {}",
             self.is_active.load(Ordering::Relaxed),

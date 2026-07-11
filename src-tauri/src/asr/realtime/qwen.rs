@@ -196,7 +196,7 @@ impl ConnectionPool {
         let session_update = serde_json::json!({
             "event_id": format!("event_{}", std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
+                .unwrap_or_default()
                 .as_millis()),
             "type": "session.update",
             "session": {
@@ -227,7 +227,7 @@ impl ConnectionPool {
                         let event = serde_json::json!({
                             "event_id": format!("event_{}", std::time::SystemTime::now()
                                 .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap()
+                                .unwrap_or_default()
                                 .as_millis()),
                             "type": "input_audio_buffer.append",
                             "audio": encoded

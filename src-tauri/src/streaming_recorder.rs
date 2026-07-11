@@ -104,8 +104,8 @@ impl StreamingRecorder {
         tracing::info!("开始流式录音...");
 
         // 清空之前的数据
-        self.full_audio_data.lock().unwrap().clear();
-        *self.is_recording.lock().unwrap() = true;
+        self.full_audio_data.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        *self.is_recording.lock().unwrap_or_else(|e| e.into_inner()) = true;
 
         // 创建音频块通道（缓冲 50 个块，约 10 秒）
         let (chunk_tx, chunk_rx) = bounded::<Vec<i16>>(50);
@@ -166,12 +166,12 @@ impl StreamingRecorder {
             cpal::SampleFormat::F32 => device.build_input_stream(
                 &config,
                 move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                    if !*is_recording.lock().unwrap() {
+                    if !*is_recording.lock().unwrap_or_else(|e| e.into_inner()) {
                         return;
                     }
 
                     // 保存原始数据用于备用方案
-                    full_audio_data.lock().unwrap().extend_from_slice(data);
+                    full_audio_data.lock().unwrap_or_else(|e| e.into_inner()).extend_from_slice(data);
 
                     // 处理数据：转单声道 + 降采样
                     let mono = Self::to_mono(data, channels);
@@ -179,14 +179,14 @@ impl StreamingRecorder {
 
                     // 基于时间的音频级别发送（目标 ~30Hz，每 33ms 发送一次）
                     if let Some(ref app) = app_handle_f32 {
-                        let mut last_emit = last_emit_time_clone.lock().unwrap();
+                        let mut last_emit = last_emit_time_clone.lock().unwrap_or_else(|e| e.into_inner());
                         if last_emit.elapsed().as_millis() >= 33 {
                             let level = calculate_audio_level(&resampled);
                             emit_audio_level(app, level);
                             *last_emit = Instant::now();
 
                             // 调试日志：每30次打印一次（约每秒）
-                            let mut counter = emit_counter_clone.lock().unwrap();
+                            let mut counter = emit_counter_clone.lock().unwrap_or_else(|e| e.into_inner());
                             *counter += 1;
                             if *counter % 30 == 0 {
                                 tracing::info!("[AudioLevel] 发送音频级别: {:.4} (30Hz)", level);
@@ -195,7 +195,7 @@ impl StreamingRecorder {
                     }
 
                     // 累积样本
-                    let mut pending = pending_samples_clone.lock().unwrap();
+                    let mut pending = pending_samples_clone.lock().unwrap_or_else(|e| e.into_inner());
                     pending.extend(resampled);
 
                     // 当累积足够样本时，发送块
@@ -204,7 +204,7 @@ impl StreamingRecorder {
 
                         // VAD 判断
                         let is_active = is_voice_active(&chunk);
-                        let mut hangover = vad_hangover_clone.lock().unwrap();
+                        let mut hangover = vad_hangover_clone.lock().unwrap_or_else(|e| e.into_inner());
 
                         if is_active {
                             *hangover = HANGOVER_CHUNKS;
@@ -214,14 +214,14 @@ impl StreamingRecorder {
 
                         // 静音且拖尾结束，丢弃前先衰减增益
                         if !is_active && *hangover == 0 {
-                            let mut gain = agc_gain_clone.lock().unwrap();
+                            let mut gain = agc_gain_clone.lock().unwrap_or_else(|e| e.into_inner());
                             *gain = *gain * 0.5 + 0.5;
                             continue;
                         }
                         drop(hangover);
 
                         // AGC（带平滑处理）
-                        let mut gain = agc_gain_clone.lock().unwrap();
+                        let mut gain = agc_gain_clone.lock().unwrap_or_else(|e| e.into_inner());
                         apply_agc(&mut chunk, &mut gain);
                         drop(gain);
 
@@ -248,7 +248,7 @@ impl StreamingRecorder {
                 device.build_input_stream(
                     &config,
                     move |data: &[i16], _: &cpal::InputCallbackInfo| {
-                        if !*is_recording_i16.lock().unwrap() {
+                        if !*is_recording_i16.lock().unwrap_or_else(|e| e.into_inner()) {
                             return;
                         }
 
@@ -257,7 +257,7 @@ impl StreamingRecorder {
                             data.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
 
                         // 保存原始数据
-                        full_audio_data_i16.lock().unwrap().extend(&f32_data);
+                        full_audio_data_i16.lock().unwrap_or_else(|e| e.into_inner()).extend(&f32_data);
 
                         // 处理数据
                         let mono = Self::to_mono(&f32_data, channels);
@@ -266,7 +266,7 @@ impl StreamingRecorder {
 
                         // 基于时间的音频级别发送（目标 ~30Hz）
                         if let Some(ref app) = app_handle_i16 {
-                            let mut last_emit = last_emit_time_i16.lock().unwrap();
+                            let mut last_emit = last_emit_time_i16.lock().unwrap_or_else(|e| e.into_inner());
                             if last_emit.elapsed().as_millis() >= 33 {
                                 let level = calculate_audio_level(&resampled);
                                 emit_audio_level(app, level);
@@ -275,7 +275,7 @@ impl StreamingRecorder {
                         }
 
                         // 累积样本
-                        let mut pending = pending_samples_i16.lock().unwrap();
+                        let mut pending = pending_samples_i16.lock().unwrap_or_else(|e| e.into_inner());
                         pending.extend(resampled);
 
                         while pending.len() >= CHUNK_SAMPLES {
@@ -283,7 +283,7 @@ impl StreamingRecorder {
 
                             // VAD 判断
                             let is_active = is_voice_active(&chunk);
-                            let mut hangover = vad_hangover_i16.lock().unwrap();
+                            let mut hangover = vad_hangover_i16.lock().unwrap_or_else(|e| e.into_inner());
 
                             if is_active {
                                 *hangover = HANGOVER_CHUNKS;
@@ -293,14 +293,14 @@ impl StreamingRecorder {
 
                             // 静音且拖尾结束，丢弃前先衰减增益
                             if !is_active && *hangover == 0 {
-                                let mut gain = agc_gain_i16.lock().unwrap();
+                                let mut gain = agc_gain_i16.lock().unwrap_or_else(|e| e.into_inner());
                                 *gain = *gain * 0.5 + 0.5;
                                 continue;
                             }
                             drop(hangover);
 
                             // AGC（带平滑处理）
-                            let mut gain = agc_gain_i16.lock().unwrap();
+                            let mut gain = agc_gain_i16.lock().unwrap_or_else(|e| e.into_inner());
                             apply_agc(&mut chunk, &mut gain);
                             drop(gain);
 
@@ -328,7 +328,7 @@ impl StreamingRecorder {
                 device.build_input_stream(
                     &config,
                     move |data: &[u16], _: &cpal::InputCallbackInfo| {
-                        if !*is_recording_u16.lock().unwrap() {
+                        if !*is_recording_u16.lock().unwrap_or_else(|e| e.into_inner()) {
                             return;
                         }
 
@@ -339,7 +339,7 @@ impl StreamingRecorder {
                             .collect();
 
                         // 保存原始数据
-                        full_audio_data_u16.lock().unwrap().extend(&f32_data);
+                        full_audio_data_u16.lock().unwrap_or_else(|e| e.into_inner()).extend(&f32_data);
 
                         // 处理数据
                         let mono = Self::to_mono(&f32_data, channels);
@@ -348,7 +348,7 @@ impl StreamingRecorder {
 
                         // 基于时间的音频级别发送（目标 ~30Hz）
                         if let Some(ref app) = app_handle_u16 {
-                            let mut last_emit = last_emit_time_u16.lock().unwrap();
+                            let mut last_emit = last_emit_time_u16.lock().unwrap_or_else(|e| e.into_inner());
                             if last_emit.elapsed().as_millis() >= 33 {
                                 let level = calculate_audio_level(&resampled);
                                 emit_audio_level(app, level);
@@ -357,7 +357,7 @@ impl StreamingRecorder {
                         }
 
                         // 累积样本
-                        let mut pending = pending_samples_u16.lock().unwrap();
+                        let mut pending = pending_samples_u16.lock().unwrap_or_else(|e| e.into_inner());
                         pending.extend(resampled);
 
                         while pending.len() >= CHUNK_SAMPLES {
@@ -365,7 +365,7 @@ impl StreamingRecorder {
 
                             // VAD 判断
                             let is_active = is_voice_active(&chunk);
-                            let mut hangover = vad_hangover_u16.lock().unwrap();
+                            let mut hangover = vad_hangover_u16.lock().unwrap_or_else(|e| e.into_inner());
 
                             if is_active {
                                 *hangover = HANGOVER_CHUNKS;
@@ -375,14 +375,14 @@ impl StreamingRecorder {
 
                             // 静音且拖尾结束，丢弃前先衰减增益
                             if !is_active && *hangover == 0 {
-                                let mut gain = agc_gain_u16.lock().unwrap();
+                                let mut gain = agc_gain_u16.lock().unwrap_or_else(|e| e.into_inner());
                                 *gain = *gain * 0.5 + 0.5;
                                 continue;
                             }
                             drop(hangover);
 
                             // AGC（带平滑处理）
-                            let mut gain = agc_gain_u16.lock().unwrap();
+                            let mut gain = agc_gain_u16.lock().unwrap_or_else(|e| e.into_inner());
                             apply_agc(&mut chunk, &mut gain);
                             drop(gain);
 
@@ -418,7 +418,7 @@ impl StreamingRecorder {
         std::thread::sleep(std::time::Duration::from_millis(200));
 
         // 停止录音标志
-        *self.is_recording.lock().unwrap() = false;
+        *self.is_recording.lock().unwrap_or_else(|e| e.into_inner()) = false;
 
         // 再等待一小段时间确保最后的数据被写入
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -428,7 +428,7 @@ impl StreamingRecorder {
         self.chunk_sender = None;
 
         // 获取完整音频数据
-        let raw_audio = self.full_audio_data.lock().unwrap().clone();
+        let raw_audio = self.full_audio_data.lock().unwrap_or_else(|e| e.into_inner()).clone();
 
         if raw_audio.is_empty() {
             return Err(anyhow::anyhow!("没有录制到音频数据"));
@@ -472,7 +472,7 @@ impl StreamingRecorder {
     /// 检查是否正在录音
     #[allow(dead_code)]
     pub fn is_recording(&self) -> bool {
-        *self.is_recording.lock().unwrap()
+        *self.is_recording.lock().unwrap_or_else(|e| e.into_inner())
     }
 }
 

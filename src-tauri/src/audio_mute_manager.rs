@@ -136,7 +136,7 @@ impl AudioMuteManager {
                 // === 安全保险：超时强制重置 ===
                 // 如果 sessions > 0 但持续时间超过 SESSION_TIMEOUT_SECS（防止程序逻辑卡死导致永远静音）
                 let is_timeout = {
-                    let start_opt = last_session_start.lock().unwrap();
+                    let start_opt = last_session_start.lock().unwrap_or_else(|e| e.into_inner());
                     if let Some(start) = *start_opt {
                         start.elapsed().as_secs() > SESSION_TIMEOUT_SECS
                     } else {
@@ -152,7 +152,7 @@ impl AudioMuteManager {
                     // 强制归零计数器
                     active_sessions.store(0, Ordering::Relaxed);
                     // 清除计时器
-                    *last_session_start.lock().unwrap() = None;
+                    *last_session_start.lock().unwrap_or_else(|e| e.into_inner()) = None;
                     // 继续执行下面的恢复逻辑
                 }
 
@@ -160,7 +160,7 @@ impl AudioMuteManager {
                 // 重新读取 active_sessions（因为上面可能刚刚重置了）
                 if active_sessions.load(Ordering::Relaxed) == 0 {
                     let has_muted = {
-                        let pids = muted_pids.lock().unwrap();
+                        let pids = muted_pids.lock().unwrap_or_else(|e| e.into_inner());
                         !pids.is_empty()
                     };
 
@@ -207,7 +207,7 @@ impl AudioMuteManager {
         let prev = self.active_sessions.fetch_add(1, Ordering::Relaxed);
         if prev == 0 {
             // 从 0 变 1，开始新的一轮录音，记录开始时间
-            *self.last_session_start.lock().unwrap() = Some(Instant::now());
+            *self.last_session_start.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
         }
         tracing::debug!("AudioMuteManager session started, active: {}", prev + 1);
     }
@@ -230,7 +230,7 @@ impl AudioMuteManager {
             Ok(prev) => {
                 if prev == 1 {
                     // 从 1 变 0，本轮录音结束，清除计时器
-                    *self.last_session_start.lock().unwrap() = None;
+                    *self.last_session_start.lock().unwrap_or_else(|e| e.into_inner()) = None;
                 }
                 tracing::debug!("AudioMuteManager session ended, active: {}", prev - 1);
             }
@@ -284,7 +284,7 @@ impl AudioMuteManager {
                 .map_err(|e| format!("Failed to get session count: {}", e))?;
 
             let mut muted_count = 0;
-            let mut muted_map = self.muted_pids.lock().unwrap();
+            let mut muted_map = self.muted_pids.lock().unwrap_or_else(|e| e.into_inner());
 
             // 不再清空，改为累加模式
 
@@ -369,7 +369,7 @@ impl AudioMuteManager {
     ) -> Result<usize, String> {
         // 获取快照，放入 pending_pids 用于跟踪僵尸进程
         let mut pending_pids: HashSet<u32> = {
-            let muted_map = muted_pids.lock().unwrap();
+            let muted_map = muted_pids.lock().unwrap_or_else(|e| e.into_inner());
             muted_map.iter().cloned().collect()
         };
 
@@ -433,7 +433,7 @@ impl AudioMuteManager {
                             if volume.SetMute(false, std::ptr::null()).is_ok() {
                                 // 恢复成功后，立即从全局列表中删除
                                 {
-                                    let mut muted_map = muted_pids.lock().unwrap();
+                                    let mut muted_map = muted_pids.lock().unwrap_or_else(|e| e.into_inner());
                                     muted_map.remove(&pid);
                                 }
                                 restored_count += 1;
@@ -448,7 +448,7 @@ impl AudioMuteManager {
             // 循环结束后，pending_pids 里剩下的就是"在 muted_pids 里，但没在系统活跃会话里找到"的 PID
             // 说明这些进程已经关闭了。必须从全局 map 里删掉它们，否则看门狗会死循环空转。
             if !pending_pids.is_empty() {
-                let mut muted_map = muted_pids.lock().unwrap();
+                let mut muted_map = muted_pids.lock().unwrap_or_else(|e| e.into_inner());
                 for zombie_pid in &pending_pids {
                     muted_map.remove(zombie_pid);
                     tracing::debug!(

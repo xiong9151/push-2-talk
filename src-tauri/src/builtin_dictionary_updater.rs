@@ -243,7 +243,7 @@ fn get_http_client() -> Result<&'static reqwest::Client> {
         .timeout(std::time::Duration::from_secs(REQUEST_TIMEOUT_SECS))
         .build()?;
     let _ = CLIENT.set(client);
-    Ok(CLIENT.get().expect("http client should be initialized"))
+    Ok(CLIENT.get().expect("http client should be initialized; this is a OnceLock so it always succeeds"))
 }
 
 pub(crate) fn validate_response_content_length(content_length: Option<u64>) -> Result<()> {

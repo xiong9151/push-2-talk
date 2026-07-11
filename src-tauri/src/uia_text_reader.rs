@@ -99,7 +99,7 @@ fn blacklist_state() -> &'static Mutex<BlacklistState> {
 
 /// 检查窗口是否在黑名单中
 fn is_blacklisted(hwnd: isize, now: Instant) -> bool {
-    let mut state = blacklist_state().lock().unwrap();
+    let mut state = blacklist_state().lock().unwrap_or_else(|e| e.into_inner());
 
     // 清理过期条目
     state
@@ -117,7 +117,7 @@ fn is_blacklisted(hwnd: isize, now: Instant) -> bool {
 
 /// 记录成功（清除黑名单）
 fn record_success(hwnd: isize) {
-    let mut state = blacklist_state().lock().unwrap();
+    let mut state = blacklist_state().lock().unwrap_or_else(|e| e.into_inner());
     state.by_hwnd.remove(&hwnd);
 }
 
@@ -127,7 +127,7 @@ fn record_success(hwnd: isize) {
 /// * `true` - 已触发黑名单
 /// * `false` - 未触发黑名单
 fn record_failure(hwnd: isize, now: Instant) -> bool {
-    let mut state = blacklist_state().lock().unwrap();
+    let mut state = blacklist_state().lock().unwrap_or_else(|e| e.into_inner());
 
     let entry = state.by_hwnd.entry(hwnd).or_insert_with(|| FailureEntry {
         first_failure_at: now,
@@ -417,7 +417,7 @@ mod tests {
     fn test_blacklist_trips_after_repeated_failures() {
         // 重置全局状态
         {
-            let mut state = blacklist_state().lock().unwrap();
+            let mut state = blacklist_state().lock().unwrap_or_else(|e| e.into_inner());
             state.by_hwnd.clear();
         }
 

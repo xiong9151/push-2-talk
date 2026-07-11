@@ -26,7 +26,7 @@ pub async fn transcribe_with_fallback_clients(
             Ok(text) => tracing::info!("✅SenseVoice 转录成功: {}", text),
             Err(e) => tracing::error!("❌SenseVoice 转录失败: {}", e),
         }
-        *sensevoice_result_clone.lock().unwrap() = Some(result);
+        *sensevoice_result_clone.lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
     });
 
     let max_retries = 2;
@@ -36,7 +36,7 @@ pub async fn transcribe_with_fallback_clients(
         if attempt > 0 {
             tracing::warn!("⏳千问第{} 次重试前，检查 SenseVoice 结果...", attempt);
 
-            if let Some(sv_result) = sensevoice_result.lock().unwrap().as_ref() {
+            if let Some(sv_result) = sensevoice_result.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
                 match sv_result {
                     Ok(text) => {
                         tracing::info!("✅千问重试前发现 SenseVoice 已成功，立即使用: {}", text);
@@ -67,7 +67,7 @@ pub async fn transcribe_with_fallback_clients(
     tracing::warn!("⚠️ 千问全部失败，等待 SenseVoice 最终结果...");
     let _ = sensevoice_handle.await;
 
-    if let Some(result) = sensevoice_result.lock().unwrap().take() {
+    if let Some(result) = sensevoice_result.lock().unwrap_or_else(|e| e.into_inner()).take() {
         match result {
             Ok(text) => {
                 tracing::info!("✅使用 SenseVoice 备用结果: {}", text);
@@ -112,7 +112,7 @@ pub async fn transcribe_doubao_sensevoice_race(
             Ok(text) => tracing::info!("✅SenseVoice 转录成功: {}", text),
             Err(e) => tracing::error!("❌SenseVoice 转录失败: {}", e),
         }
-        *sensevoice_result_clone.lock().unwrap() = Some(result);
+        *sensevoice_result_clone.lock().unwrap_or_else(|e| e.into_inner()) = Some(result);
     });
 
     let max_retries = 2;
@@ -122,7 +122,7 @@ pub async fn transcribe_doubao_sensevoice_race(
         if attempt > 0 {
             tracing::warn!("⏳豆包第{} 次重试前，检查 SenseVoice 结果...", attempt);
 
-            if let Some(sv_result) = sensevoice_result.lock().unwrap().as_ref() {
+            if let Some(sv_result) = sensevoice_result.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
                 match sv_result {
                     Ok(text) => {
                         tracing::info!("✅豆包重试前发现 SenseVoice 已成功，立即使用: {}", text);
@@ -153,7 +153,7 @@ pub async fn transcribe_doubao_sensevoice_race(
     tracing::warn!("⚠️ 豆包全部失败，等待 SenseVoice 最终结果...");
     let _ = sensevoice_handle.await;
 
-    if let Some(result) = sensevoice_result.lock().unwrap().take() {
+    if let Some(result) = sensevoice_result.lock().unwrap_or_else(|e| e.into_inner()).take() {
         match result {
             Ok(text) => {
                 tracing::info!("✅使用 SenseVoice 备用结果: {}", text);
