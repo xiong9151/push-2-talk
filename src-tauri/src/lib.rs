@@ -2741,8 +2741,20 @@ async fn transcribe_with_available_clients(
                         }
                     }
                     Some(config::AsrProvider::DoubaoIme) => {
-                        // 豆包输入法目前只支持实时流式模式，不支持 HTTP 模式
-                        Err(anyhow::anyhow!("豆包输入法 ASR 不支持 HTTP 模式"))
+                        // 豆包输入法只支持实时流式，不支持 HTTP 模式
+                        // 自动尝试第一个可用的 HTTP 提供商
+                        if let Some(q) = &qwen {
+                            tracing::info!("{}DoubaoIme 不支持 HTTP，回退到千问", log_prefix);
+                            q.transcribe_bytes(audio_data).await
+                        } else if let Some(d) = &doubao {
+                            tracing::info!("{}DoubaoIme 不支持 HTTP，回退到豆包", log_prefix);
+                            d.transcribe_bytes(audio_data).await
+                        } else if let Some(s) = &sensevoice {
+                            tracing::info!("{}DoubaoIme 不支持 HTTP，回退到 SenseVoice", log_prefix);
+                            s.transcribe_bytes(audio_data).await
+                        } else {
+                            Err(anyhow::anyhow!("豆包输入法不支持 HTTP 模式，且无可用的 HTTP 提供商"))
+                        }
                     }
                     None => {
                         tracing::error!("{}未配置 ASR 提供商", log_prefix);
@@ -2780,7 +2792,19 @@ async fn transcribe_with_available_clients(
             }
             Some(config::AsrProvider::DoubaoIme) => {
                 // 豆包输入法目前只支持实时流式模式，不支持 HTTP 模式
-                Err(anyhow::anyhow!("豆包输入法 ASR 不支持 HTTP 模式"))
+                // 自动尝试第一个可用的 HTTP 提供商
+                if let Some(q) = qwen {
+                    tracing::info!("{}DoubaoIme 不支持 HTTP，回退到千问", log_prefix);
+                    q.transcribe_bytes(audio_data).await
+                } else if let Some(d) = doubao {
+                    tracing::info!("{}DoubaoIme 不支持 HTTP，回退到豆包", log_prefix);
+                    d.transcribe_bytes(audio_data).await
+                } else if let Some(s) = sensevoice {
+                    tracing::info!("{}DoubaoIme 不支持 HTTP，回退到 SenseVoice", log_prefix);
+                    s.transcribe_bytes(audio_data).await
+                } else {
+                    Err(anyhow::anyhow!("豆包输入法不支持 HTTP 模式，且无可用的 HTTP 提供商"))
+                }
             }
             None => {
                 tracing::error!("{}未配置 ASR 提供商", log_prefix);
