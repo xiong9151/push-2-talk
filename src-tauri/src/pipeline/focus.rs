@@ -61,7 +61,6 @@ pub async fn hide_overlay_and_restore_focus(app: &AppHandle, target_hwnd: Option
 /// 验证当前焦点是否在目标窗口
 ///
 /// 用于在粘贴前进行最后检查
-#[allow(dead_code)]
 pub fn verify_focus(target_hwnd: Option<isize>) -> bool {
     match target_hwnd {
         Some(hwnd) => win32_input::verify_foreground_window(hwnd),

@@ -288,7 +288,7 @@ impl AudioRecorder {
         Ok(wav_data)
     }
 
-    /// 停止录音并保存到文件（保留兼容性）
+    /// 停止录音并保存到文件（保留兼容性，未使用）
     #[allow(dead_code)]
     pub fn stop_recording(&mut self) -> Result<PathBuf> {
         tracing::info!("停止录音...");

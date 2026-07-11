@@ -468,7 +468,6 @@ impl StreamingRecorder {
     }
 
     /// 检查是否正在录音
-    #[allow(dead_code)]
     pub fn is_recording(&self) -> bool {
         *self.is_recording.lock().unwrap_or_else(|e| e.into_inner())
     }
