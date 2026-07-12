@@ -104,9 +104,9 @@ pub fn send_ctrl_v() -> Result<()> {
     thread::sleep(Duration::from_millis(KEY_DELAY_MS));
 
     // 按下并释放 V
-    send_key_down(VK_C)?;
+    send_key_down(VK_V)?;
     thread::sleep(Duration::from_millis(KEY_DELAY_MS));
-    send_key_up(VK_C)?;
+    send_key_up(VK_V)?;
     thread::sleep(Duration::from_millis(KEY_DELAY_MS));
 
     // 释放 Ctrl
