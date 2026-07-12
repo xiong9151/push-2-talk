@@ -1,16 +1,17 @@
 use rodio::{OutputStream, OutputStreamHandle, Sink, Source};
-use rodio::source::SineWave;
-use std::sync::OnceLock;
+use std::io::Cursor;
 use std::time::Duration;
 
-// 在编译时嵌入音效文件（仅用于通用通知音）
+// 在编译时嵌入提示音 WAV 文件
+const START_BEEP: &[u8] = include_bytes!("../resources/start_beep.wav");
+const STOP_BEEP: &[u8] = include_bytes!("../resources/stop_beep.wav");
 const NOTIFICATION_SOUND: &[u8] = include_bytes!("../resources/notification.ogg");
 
 // 音量系数 (0.0 - 1.0)
 const VOLUME: f32 = 0.2;
 
 /// 预初始化的音频输出句柄（Send + Sync，可安全跨线程使用）
-static STREAM_HANDLE: OnceLock<OutputStreamHandle> = OnceLock::new();
+static STREAM_HANDLE: std::sync::OnceLock<OutputStreamHandle> = std::sync::OnceLock::new();
 
 /// 提前初始化音频输出句柄，消除首次按键延迟
 pub fn preinit() {
@@ -23,57 +24,32 @@ pub fn preinit() {
     }
 }
 
+/// 在后台线程中播放 WAV 音频数据
+fn play_wav(data: &'static [u8], volume: f32) {
+    if let Some(handle) = STREAM_HANDLE.get() {
+        std::thread::spawn(move || {
+            if let Ok(sink) = Sink::try_new(handle) {
+                let cursor = Cursor::new(data);
+                if let Ok(source) = rodio::Decoder::new(cursor) {
+                    sink.append(source.amplify(volume));
+                    sink.sleep_until_end();
+                }
+            }
+        });
+    }
+}
+
 /// 播放提示音（非阻塞）
 pub fn play_notification() {
-    if let Some(handle) = STREAM_HANDLE.get() {
-        std::thread::spawn(move || {
-            if let Ok(sink) = Sink::try_new(handle) {
-                let cursor = std::io::Cursor::new(NOTIFICATION_SOUND);
-                if let Ok(source) = rodio::Decoder::new(cursor) {
-                    sink.append(source.amplify(VOLUME));
-                    sink.sleep_until_end();
-                }
-            }
-        });
-    }
+    play_wav(NOTIFICATION_SOUND, VOLUME);
 }
 
-/// 播放"开始录音"提示音 — 木琴升调：C5(523Hz) → E5(659Hz) → G5(784Hz)
-/// 每声 80ms，间隔 80ms，声音清脆有上升感
+/// 播放"开始录音"提示音 — 木琴升调：C5→E5→G5
 pub fn play_start_beep() {
-    if let Some(handle) = STREAM_HANDLE.get() {
-        std::thread::spawn(move || {
-            if let Ok(sink) = Sink::try_new(handle) {
-                let notes = [523.0, 659.0, 784.0]; // C5, E5, G5
-                for &freq in &notes {
-                    let tone = SineWave::new(freq)
-                        .take_duration(Duration::from_millis(80))
-                        .amplify(0.3);
-                    sink.append(tone);
-                    sink.sleep_until_end();
-                    std::thread::sleep(Duration::from_millis(80));
-                }
-            }
-        });
-    }
+    play_wav(START_BEEP, 0.3);
 }
 
-/// 播放"停止录音"提示音 — 木琴降调：G5(784Hz) → E5(659Hz) → C5(523Hz)
-/// 每声 80ms，间隔 80ms，声音清脆有下降感
+/// 播放"停止录音"提示音 — 木琴降调：G5→E5→C5
 pub fn play_stop_beep() {
-    if let Some(handle) = STREAM_HANDLE.get() {
-        std::thread::spawn(move || {
-            if let Ok(sink) = Sink::try_new(handle) {
-                let notes = [784.0, 659.0, 523.0]; // G5, E5, C5
-                for &freq in &notes {
-                    let tone = SineWave::new(freq)
-                        .take_duration(Duration::from_millis(80))
-                        .amplify(0.3);
-                    sink.append(tone);
-                    sink.sleep_until_end();
-                    std::thread::sleep(Duration::from_millis(80));
-                }
-            }
-        });
-    }
+    play_wav(STOP_BEEP, 0.3);
 }
