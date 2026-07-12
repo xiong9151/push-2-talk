@@ -9,8 +9,8 @@ use std::time::Duration;
 #[cfg(target_os = "windows")]
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, SendInput, INPUT, INPUT_KEYBOARD, KEYBDINPUT, KEYBD_EVENT_FLAGS,
-    KEYEVENTF_KEYUP, VIRTUAL_KEY, VK_C, VK_CONTROL, VK_LCONTROL, VK_LMENU, VK_LSHIFT, VK_LWIN,
-    VK_MENU, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_V,
+    KEYEVENTF_KEYUP, KEYEVENTF_UNICODE, VIRTUAL_KEY, VK_C, VK_CONTROL, VK_LCONTROL, VK_LMENU,
+    VK_LSHIFT, VK_LWIN, VK_MENU, VK_RCONTROL, VK_RMENU, VK_RSHIFT, VK_RWIN, VK_SHIFT, VK_V,
 };
 
 /// 按键间延迟（毫秒）
@@ -104,13 +104,75 @@ pub fn send_ctrl_v() -> Result<()> {
     thread::sleep(Duration::from_millis(KEY_DELAY_MS));
 
     // 按下并释放 V
-    send_key_down(VK_V)?;
+    send_key_down(VK_C)?;
     thread::sleep(Duration::from_millis(KEY_DELAY_MS));
-    send_key_up(VK_V)?;
+    send_key_up(VK_C)?;
     thread::sleep(Duration::from_millis(KEY_DELAY_MS));
 
     // 释放 Ctrl
     send_key_up(VK_CONTROL)?;
+
+    Ok(())
+}
+
+/// 使用 Win32 SendInput 的 KEYEVENTF_UNICODE 直接输入 Unicode 文本
+/// 不经过剪贴板，支持中文、英文、特殊符号
+#[cfg(target_os = "windows")]
+pub fn send_unicode_text(text: &str) -> Result<()> {
+    tracing::debug!("win32_input: 发送 Unicode 文本");
+
+    // 将字符串编码为 UTF-16
+    let utf16: Vec<u16> = text.encode_utf16().collect();
+
+    // 构建 INPUT 数组：每个字符需要 2 个事件（按下 + 释放）
+    let mut inputs: Vec<INPUT> = Vec::with_capacity(utf16.len() * 2);
+
+    for &code_unit in &utf16 {
+        // 跳过 BOM 和空字符
+        if code_unit == 0 {
+            continue;
+        }
+
+        // 按下事件 (KEYEVENTF_UNICODE)
+        inputs.push(INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VIRTUAL_KEY(0),
+                    wScan: code_unit,
+                    dwFlags: KEYEVENTF_UNICODE,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        });
+
+        // 释放事件 (KEYEVENTF_UNICODE | KEYEVENTF_KEYUP)
+        inputs.push(INPUT {
+            r#type: INPUT_KEYBOARD,
+            Anonymous: windows::Win32::UI::Input::KeyboardAndMouse::INPUT_0 {
+                ki: KEYBDINPUT {
+                    wVk: VIRTUAL_KEY(0),
+                    wScan: code_unit,
+                    dwFlags: KEYEVENTF_UNICODE | KEYEVENTF_KEYUP,
+                    time: 0,
+                    dwExtraInfo: 0,
+                },
+            },
+        });
+    }
+
+    if inputs.is_empty() {
+        anyhow::bail!("没有可输入的字符");
+    }
+
+    let result = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+    if result == 0 {
+        anyhow::bail!("SendInput Unicode 失败");
+    }
+
+    // 等待输入处理完成
+    thread::sleep(Duration::from_millis(50));
 
     Ok(())
 }
