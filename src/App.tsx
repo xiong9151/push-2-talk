@@ -543,34 +543,33 @@ function App() {
         } finally {
           releaseConfigSyncWindow(syncToken, true);
         }
-        // 同步窗口已释放，现在异步启动服务（不阻塞 UI）
-        if (configSnapshot?.effectiveAsrConfig && status === "idle") {
-          setTimeout(async () => {
-            try {
-              await startApp({
-                apiKey: "",
-                fallbackApiKey: "",
-                useRealtime: true,
-                enablePostProcess: false,
-                enableDictionaryEnhancement: true,
-                llmConfig: configSnapshot.loadedLlmConfig,
-                smartCommandConfig: null,
-                assistantConfig: configSnapshot.loadedAssistantConfig,
-                asrConfig: configSnapshot.effectiveAsrConfig as AsrConfig,
-                dualHotkeyConfig: dualHotkeyConfig,
-                enableMuteOtherApps: enableMuteOtherApps,
-                dictionary: buildRuntimeDictionary(
-                  configSnapshot.loadedDictionary,
-                  configSnapshot.loadedBuiltinDictionaryDomains
-                ),
-                theme: configSnapshot.theme,
-              });
-              setStatus("running");
-            } catch (err) {
-              console.error("启动服务失败:", err);
-            }
-          }, 300);
-        }
+        // 同步窗口已释放，现在总是启动热键服务（不阻塞 UI）
+        setTimeout(async () => {
+          try {
+            await startApp({
+              apiKey: configSnapshot?.asrApiKey ?? "",
+              fallbackApiKey: configSnapshot?.asrFallbackApiKey ?? "",
+              useRealtime: true,
+              enablePostProcess: false,
+              enableDictionaryEnhancement: true,
+              llmConfig: configSnapshot?.loadedLlmConfig ?? DEFAULT_LLM_CONFIG,
+              smartCommandConfig: null,
+              assistantConfig: configSnapshot?.loadedAssistantConfig ?? DEFAULT_ASSISTANT_CONFIG,
+              asrConfig: (configSnapshot?.effectiveAsrConfig ?? null) as unknown as AsrConfig,
+              dualHotkeyConfig: dualHotkeyConfig,
+              enableMuteOtherApps: enableMuteOtherApps,
+              dictionary: buildRuntimeDictionary(
+                configSnapshot?.loadedDictionary ?? [],
+                configSnapshot?.loadedBuiltinDictionaryDomains ?? []
+              ),
+              theme: configSnapshot?.theme ?? "light",
+            });
+            setStatus("running");
+          } catch (err) {
+            console.error("启动服务失败:", err);
+          }
+        }, 300);
+        // 启动时自动检查更新（只执行一次）
         // 启动时自动检查更新（只执行一次）
         if (!hasCheckedUpdateOnStartup.current) {
           hasCheckedUpdateOnStartup.current = true;

@@ -545,6 +545,8 @@ export function useAppServiceController({
       // 返回配置快照供 App.tsx 异步启动服务
       return {
         effectiveAsrConfig: effectiveAsrConfig && isAsrConfigValid(effectiveAsrConfig) ? effectiveAsrConfig : null,
+        asrApiKey: config.dashscope_api_key || "",
+        asrFallbackApiKey: config.siliconflow_api_key || "",
         loadedLlmConfig,
         loadedAssistantConfig,
         loadedDictionary: loadedDict,
