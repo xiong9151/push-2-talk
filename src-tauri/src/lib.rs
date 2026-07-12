@@ -3873,6 +3873,86 @@ async fn get_autostart(app: AppHandle) -> Result<bool, String> {
     app.autolaunch().is_enabled().map_err(|e| e.to_string())
 }
 
+/// 设置以管理员身份运行（通过注册表 AppCompatFlags）
+#[tauri::command]
+async fn set_run_as_admin(enabled: bool) -> Result<String, String> {
+    let exe_path = std::env::current_exe().map_err(|e| format!("获取程序路径失败: {}", e))?;
+    let exe_str = exe_path.to_string_lossy().to_string();
+
+    let key_path = "Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers";
+    let hklm = windows::Win32::UI::Shell::HKEY_CURRENT_USER;
+
+    if enabled {
+        // 写入注册表：设置 RUNASADMIN 标志
+        let value = "~ RUNASADMIN";
+        unsafe {
+            let key = windows::Win32::System::Registry::RegCreateKeyW(
+                hklm,
+                &windows::core::HSTRING::from(key_path),
+            );
+            if let Ok(key) = key {
+                windows::Win32::System::Registry::RegSetValueW(
+                    key,
+                    &windows::core::HSTRING::from(&exe_str),
+                    windows::Win32::System::Registry::REG_SZ,
+                    value.as_bytes(),
+                )
+                .ok()
+                .map_err(|e| format!("写入注册表失败: {}", e))?;
+            }
+        }
+        Ok("已启用管理员启动，下次启动生效".to_string())
+    } else {
+        // 删除注册表中的 RUNASADMIN 标志
+        unsafe {
+            let key = windows::Win32::System::Registry::RegOpenKeyW(
+                hklm,
+                &windows::core::HSTRING::from(key_path),
+            );
+            if let Ok(key) = key {
+                let _ = windows::Win32::System::Registry::RegDeleteValueW(
+                    key,
+                    &windows::core::HSTRING::from(&exe_str),
+                );
+            }
+        }
+        Ok("已禁用管理员启动".to_string())
+    }
+}
+
+/// 获取管理员启动状态
+#[tauri::command]
+async fn get_run_as_admin() -> Result<bool, String> {
+    let exe_path = std::env::current_exe().map_err(|e| format!("获取程序路径失败: {}", e))?;
+    let exe_str = exe_path.to_string_lossy().to_string();
+
+    let key_path = "Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers";
+    let hklm = windows::Win32::UI::Shell::HKEY_CURRENT_USER;
+
+    unsafe {
+        let key = windows::Win32::System::Registry::RegOpenKeyW(
+            hklm,
+            &windows::core::HSTRING::from(key_path),
+        );
+        if let Ok(key) = key {
+            let mut buffer = [0u8; 1024];
+            let mut size = buffer.len() as u32;
+            let result = windows::Win32::System::Registry::RegQueryValueW(
+                key,
+                &windows::core::HSTRING::from(&exe_str),
+                Some(&mut buffer),
+                &mut size,
+            );
+            if result.is_ok() {
+                let value = std::str::from_utf8(&buffer[..size as usize])
+                    .unwrap_or("");
+                return Ok(value.contains("RUNASADMIN"));
+            }
+        }
+    }
+    Ok(false)
+}
+
 /// 重置热键状态（用于手动修复状态卡死问题）
 #[tauri::command]
 async fn reset_hotkey_state(app_handle: AppHandle) -> Result<String, String> {
@@ -4975,6 +5055,8 @@ pub fn run() {
             show_notification_window,
             test_llm_provider,
             debug_audio_recording,
+            set_run_as_admin,
+            get_run_as_admin,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
