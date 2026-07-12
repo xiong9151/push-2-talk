@@ -32,7 +32,7 @@ pub fn preinit() {
 /// 播放提示音（非阻塞）
 pub fn play_notification() {
     std::thread::spawn(|| {
-        let mut guard = get_player();
+        let guard = get_player();
         if let Some((_, ref sink)) = *guard {
             let cursor = std::io::Cursor::new(NOTIFICATION_SOUND);
             if let Ok(source) = rodio::Decoder::new(cursor) {
@@ -50,7 +50,7 @@ pub fn play_notification() {
 /// 第 0.5 秒：短促的 100% 音量滴声（100ms）
 pub fn play_start_beep() {
     std::thread::spawn(|| {
-        let mut guard = get_player();
+        let guard = get_player();
         if let Some((_, ref sink)) = *guard {
             sink.clear();
             let tone1 = SineWave::new(440.0)
@@ -61,7 +61,7 @@ pub fn play_start_beep() {
             drop(guard);
             // 等待 400ms，使两声之间间隔 500ms（第一声 100ms + 400ms 静音）
             std::thread::sleep(Duration::from_millis(400));
-            let mut guard = get_player();
+            let guard = get_player();
             if let Some((_, ref sink)) = *guard {
                 let tone2 = SineWave::new(440.0)
                     .take_duration(Duration::from_millis(100))
@@ -79,7 +79,7 @@ pub fn play_start_beep() {
 /// 第 0.5 秒：短促的 50% 音量滴声（100ms）
 pub fn play_stop_beep() {
     std::thread::spawn(|| {
-        let mut guard = get_player();
+        let guard = get_player();
         if let Some((_, ref sink)) = *guard {
             sink.clear();
             let tone1 = SineWave::new(440.0)
@@ -88,7 +88,7 @@ pub fn play_stop_beep() {
             sink.append(tone1);
             drop(guard);
             std::thread::sleep(Duration::from_millis(400));
-            let mut guard = get_player();
+            let guard = get_player();
             if let Some((_, ref sink)) = *guard {
                 let tone2 = SineWave::new(440.0)
                     .take_duration(Duration::from_millis(100))

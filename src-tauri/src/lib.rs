@@ -4581,7 +4581,7 @@ async fn test_llm_provider(
 #[tauri::command]
 async fn debug_audio_recording(
     app_handle: AppHandle,
-    state: tauri::State<'_, AppState>,
+    _state: tauri::State<'_, AppState>,
 ) -> Result<audio_recorder::AudioDiagnostics, String> {
     // 用 AudioRecorder 录制 3 秒
     let mut recorder = audio_recorder::AudioRecorder::new()
