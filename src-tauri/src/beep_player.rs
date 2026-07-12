@@ -1,5 +1,4 @@
 use rodio::{OutputStream, Sink, Source};
-use rodio::source::SineWave;
 use std::io::Cursor;
 use std::time::Duration;
 

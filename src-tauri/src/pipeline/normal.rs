@@ -11,6 +11,7 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
 use super::types::{PipelineResult, TranscriptionContext, TranscriptionMode};
+use crate::config::AppConfig;
 use crate::learning::coordinator::start_learning_observation;
 use crate::llm_post_processor::LlmPostProcessor;
 use crate::text_inserter::TextInserter;

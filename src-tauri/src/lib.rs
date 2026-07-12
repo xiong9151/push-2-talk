@@ -2353,7 +2353,7 @@ async fn handle_assistant_mode(
     // 2. 如果实时模式失败且有音频数据，尝试 HTTP 备用
     let final_result = if asr_result.is_err() && audio_data.is_some() {
         tracing::warn!("实时 ASR 失败，尝试 HTTP 备用");
-        let data = audio_data.unwrap_or_else(|e| e.into_inner());
+        let data = audio_data.unwrap();
         let enable_fb = *enable_fallback_state.lock().unwrap_or_else(|e| e.into_inner());
         let qwen = { qwen_client_state.lock().unwrap_or_else(|e| e.into_inner()).clone() };
         let doubao = { doubao_client_state.lock().unwrap_or_else(|e| e.into_inner()).clone() };
@@ -4773,7 +4773,7 @@ pub fn run() {
 
             // 创建系统托盘图标
             let _tray = TrayIconBuilder::new()
-                .icon(app.default_window_icon().unwrap_or_else(|e| e.into_inner()).clone())
+                .icon(app.default_window_icon().unwrap().clone())
                 .menu(&menu)
                 .tooltip("PushToTalk - AI 语音转写助手")
                 .on_menu_event(move |app, event| match event.id.as_ref() {
