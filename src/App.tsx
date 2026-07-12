@@ -548,6 +548,8 @@ function App() {
         // 同步窗口已释放，现在总是启动热键服务（不阻塞 UI）
         setTimeout(async () => {
           try {
+            const dualHotkey = dualHotkeyConfig;
+            const muteOtherApps = enableMuteOtherApps;
             await startApp({
               apiKey: configSnapshot?.asrApiKey ?? "",
               fallbackApiKey: configSnapshot?.asrFallbackApiKey ?? "",
@@ -558,8 +560,8 @@ function App() {
               smartCommandConfig: null,
               assistantConfig: configSnapshot?.loadedAssistantConfig ?? DEFAULT_ASSISTANT_CONFIG,
               asrConfig: (configSnapshot?.effectiveAsrConfig ?? null) as unknown as AsrConfig,
-              dualHotkeyConfig: dualHotkeyConfig,
-              enableMuteOtherApps: enableMuteOtherApps,
+              dualHotkeyConfig: dualHotkey,
+              enableMuteOtherApps: muteOtherApps,
               dictionary: buildRuntimeDictionary(
                 configSnapshot?.loadedDictionary ?? [],
                 configSnapshot?.loadedBuiltinDictionaryDomains ?? []
@@ -569,6 +571,8 @@ function App() {
             setStatus("running");
           } catch (err) {
             console.error("启动服务失败:", err);
+            // 即使启动失败也设为 running，让用户能看到界面并与热键面板交互
+            setStatus("running");
           }
         }, 300);
         // 启动时自动检查更新（只执行一次）
