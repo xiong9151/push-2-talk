@@ -4697,6 +4697,9 @@ pub fn run() {
                 is_assistant_processing: Arc::new(AtomicBool::new(false)),
             };
 
+            // 预初始化音频播放器，消除首次按键提示音延迟
+            beep_player::preinit();
+
             let initial_config = load_persisted_config().unwrap_or_else(|e| {
                 tracing::warn!("创建托盘菜单时加载配置失败，使用默认值: {}", e);
                 AppConfig::new()
