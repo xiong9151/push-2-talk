@@ -93,7 +93,11 @@
       "digestAlgorithm": "sha256",
       "timestampUrl": ""
     },
-    "createUpdaterArtifacts": true
+    "createUpdaterArtifacts": true,
+    "nsis": {
+      "installMode": "currentUser",
+      "installerHooks": "./resources/nsis-hooks.nsh"
+    }
   },
   "plugins": {
     "updater": {
