@@ -389,8 +389,6 @@ function App() {
     setError,
     enableAutostart,
     setEnableAutostart,
-    runAsAdmin,
-    setRunAsAdmin,
     enableMuteOtherApps,
     setEnableMuteOtherApps,
     theme,
