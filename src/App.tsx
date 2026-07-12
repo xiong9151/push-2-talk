@@ -556,7 +556,7 @@ function App() {
                 llmConfig: configSnapshot.loadedLlmConfig,
                 smartCommandConfig: null,
                 assistantConfig: configSnapshot.loadedAssistantConfig,
-                asrConfig: configSnapshot.effectiveAsrConfig,
+                asrConfig: configSnapshot.effectiveAsrConfig as AsrConfig,
                 dualHotkeyConfig: dualHotkeyConfig,
                 enableMuteOtherApps: enableMuteOtherApps,
                 dictionary: buildRuntimeDictionary(

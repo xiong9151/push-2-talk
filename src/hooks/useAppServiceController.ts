@@ -5,10 +5,10 @@ import type {
   AppConfig,
   AppStatus,
   AsrConfig,
+  AsrLanguageMode,
   AssistantConfig,
   DictionaryEntry,
   DualHotkeyConfig,
-  HotkeyKey,
   LearningConfig,
   LlmConfig,
 } from "../types";
@@ -478,8 +478,8 @@ export function useAppServiceController({
       setApiKey(config.dashscope_api_key);
       setFallbackApiKey(config.siliconflow_api_key || "");
 
-      const loadedAsrConfig = config.asr_config
-        ? { ...config.asr_config, language_mode: config.asr_config.language_mode === "zh" ? "zh" : "auto" }
+      const loadedAsrConfig: AsrConfig | null = config.asr_config
+        ? { ...config.asr_config, language_mode: (config.asr_config.language_mode === "zh" ? "zh" : "auto") as AsrLanguageMode }
         : null;
 
       let effectiveAsrConfig = loadedAsrConfig;
@@ -508,7 +508,7 @@ export function useAppServiceController({
       }
       setLlmConfig(loadedLlmConfig);
 
-      let loadedAssistantConfig = config.assistant_config || DEFAULT_ASSISTANT_CONFIG;
+      let loadedAssistantConfig: AssistantConfig = config.assistant_config || DEFAULT_ASSISTANT_CONFIG;
       if (!loadedAssistantConfig.qa_system_prompt || !loadedAssistantConfig.text_processing_system_prompt) {
         loadedAssistantConfig = DEFAULT_ASSISTANT_CONFIG;
       }
@@ -531,11 +531,11 @@ export function useAppServiceController({
       setTheme(config.theme || "light");
 
       const dictArr = Array.isArray(config.dictionary) ? config.dictionary : [];
-      let loadedDict;
+      let loadedDict: DictionaryEntry[];
       if (dictArr.length > 0 && typeof dictArr[0] === "object") {
-        loadedDict = dictArr;
+        loadedDict = dictArr as DictionaryEntry[];
       } else {
-        loadedDict = dictArr.filter(w => typeof w === "string" && w.trim()).map(parseEntry);
+        loadedDict = (dictArr as string[]).filter(w => typeof w === "string" && w.trim()).map(parseEntry);
       }
       setDictionary(loadedDict);
 
