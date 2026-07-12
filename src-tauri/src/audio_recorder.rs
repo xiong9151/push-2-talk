@@ -5,7 +5,6 @@ use hound::{WavSpec, WavWriter};
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
 use tauri::AppHandle;
 
 use crate::audio_utils::{apply_agc, calculate_audio_level, emit_audio_level, validate_audio};
