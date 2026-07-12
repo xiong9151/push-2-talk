@@ -208,14 +208,19 @@ function App() {
     syncWindowSnapshotRef.current = nextSnapshot;
     setSyncWindowSnapshot(nextSnapshot);
   }, []);
-  const releaseConfigSyncWindow = useCallback((token: number) => {
-    scheduleSyncWindowRelease({
-      token,
-      complete: (releasedToken) => {
-        configSyncWindowControllerRef.current.complete(releasedToken);
-        updateSyncWindowSnapshot();
-      },
-    });
+  const releaseConfigSyncWindow = useCallback((token: number, immediate?: boolean) => {
+    if (immediate) {
+      configSyncWindowControllerRef.current.complete(token);
+      updateSyncWindowSnapshot();
+    } else {
+      scheduleSyncWindowRelease({
+        token,
+        complete: (releasedToken) => {
+          configSyncWindowControllerRef.current.complete(releasedToken);
+          updateSyncWindowSnapshot();
+        },
+      });
+    }
   }, [updateSyncWindowSnapshot]);
 
   const handleExternalConfigUpdated = useCallback((_config: AppConfig) => {
@@ -533,7 +538,7 @@ function App() {
         try {
           await loadConfig();
         } finally {
-          releaseConfigSyncWindow(syncToken);
+          releaseConfigSyncWindow(syncToken, true);
         }
         // 启动时自动检查更新（只执行一次）
         if (!hasCheckedUpdateOnStartup.current) {
