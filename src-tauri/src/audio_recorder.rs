@@ -5,6 +5,7 @@ use hound::{WavSpec, WavWriter};
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 use tauri::AppHandle;
 
 use crate::audio_utils::{apply_agc, calculate_audio_level, emit_audio_level, validate_audio};
@@ -288,6 +289,85 @@ impl AudioRecorder {
         Ok(wav_data)
     }
 
+    /// 停止录音并返回内存中的 WAV 数据，同时收集诊断信息
+    pub fn stop_recording_with_diagnostics(&mut self) -> Result<(Vec<u8>, AudioDiagnostics)> {
+        *self.is_recording.lock().unwrap_or_else(|e| e.into_inner()) = false;
+        self.stream = None;
+        std::thread::sleep(std::time::Duration::from_millis(100));
+
+        let raw_audio = self.audio_data.lock().unwrap_or_else(|e| e.into_inner()).clone();
+        let original_len = raw_audio.len();
+        let duration_secs = original_len as f64 / self.device_sample_rate as f64;
+
+        // 计算原始 RMS
+        let raw_rms = if !raw_audio.is_empty() {
+            let sum: f64 = raw_audio.iter().map(|&s| (s as f64).powi(2)).sum();
+            (sum / raw_audio.len() as f64).sqrt() as f32
+        } else {
+            0.0
+        };
+
+        // 计算原始峰值
+        let raw_peak = raw_audio.iter().map(|&s| s.abs()).fold(0.0f32, f32::max);
+
+        // 转单声道
+        let mono_audio = self.to_mono(&raw_audio, self.channels);
+        // 降采样
+        let mut resampled_audio =
+            self.resample(&mono_audio, self.device_sample_rate, TARGET_SAMPLE_RATE);
+
+        // AGC 处理
+        let mut current_gain = 1.0;
+        let mut gain_history = Vec::new();
+        for chunk in resampled_audio.chunks_mut(3200) {
+            apply_agc(chunk, &mut current_gain);
+            gain_history.push(current_gain);
+        }
+
+        // 计算处理后 RMS
+        let processed_rms = if !resampled_audio.is_empty() {
+            let sum: f64 = resampled_audio.iter().map(|&s| (s as f64).powi(2)).sum();
+            (sum / resampled_audio.len() as f64).sqrt() as f32
+        } else {
+            0.0
+        };
+
+        // 写入 WAV
+        let spec = WavSpec {
+            channels: 1,
+            sample_rate: TARGET_SAMPLE_RATE,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut cursor = Cursor::new(Vec::new());
+        {
+            let mut writer = WavWriter::new(&mut cursor, spec)?;
+            for &sample in resampled_audio.iter() {
+                let amplitude =
+                    (sample * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16;
+                writer.write_sample(amplitude)?;
+            }
+            writer.finalize()?;
+        }
+        let wav_data = cursor.into_inner();
+
+        let diagnostics = AudioDiagnostics {
+            duration_secs,
+            device_sample_rate: self.device_sample_rate,
+            target_sample_rate: TARGET_SAMPLE_RATE,
+            channels: self.channels,
+            raw_sample_count: original_len,
+            raw_rms,
+            raw_peak,
+            processed_rms,
+            final_gain: current_gain,
+            gain_history,
+            wav_size_bytes: wav_data.len(),
+        };
+
+        Ok((wav_data, diagnostics))
+    }
+
     /// 停止录音并保存到文件（保留兼容性，未使用）
     #[allow(dead_code)]
     pub fn stop_recording(&mut self) -> Result<PathBuf> {
@@ -353,6 +433,33 @@ impl AudioRecorder {
     pub fn is_recording(&self) -> bool {
         *self.is_recording.lock().unwrap_or_else(|e| e.into_inner())
     }
+}
+
+/// 音频诊断信息
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
+pub struct AudioDiagnostics {
+    /// 录音时长（秒）
+    pub duration_secs: f64,
+    /// 设备采样率
+    pub device_sample_rate: u32,
+    /// 目标采样率
+    pub target_sample_rate: u32,
+    /// 声道数
+    pub channels: u16,
+    /// 原始样本数
+    pub raw_sample_count: usize,
+    /// 原始音频 RMS
+    pub raw_rms: f32,
+    /// 原始音频峰值
+    pub raw_peak: f32,
+    /// AGC 处理后音频 RMS
+    pub processed_rms: f32,
+    /// 最终增益
+    pub final_gain: f32,
+    /// 增益历史（每 3200 样本记录一次）
+    pub gain_history: Vec<f32>,
+    /// WAV 文件大小（字节）
+    pub wav_size_bytes: usize,
 }
 
 // 实现 Send 和 Sync traits

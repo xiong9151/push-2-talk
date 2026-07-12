@@ -1,6 +1,7 @@
-import { Download, Power, RefreshCw, SlidersHorizontal, VolumeX, GraduationCap, Settings2, HelpCircle } from "lucide-react";
+import { Download, Power, RefreshCw, SlidersHorizontal, VolumeX, GraduationCap, Settings2, HelpCircle, Mic, AlertCircle } from "lucide-react";
 import { useState } from "react";
-import type { AppStatus, UpdateStatus, LearningConfig, SharedLlmConfig } from "../types";
+import { invoke } from "@tauri-apps/api/core";
+import type { AppStatus, UpdateStatus, LearningConfig, SharedLlmConfig, AudioDiagnostics } from "../types";
 import { Toggle, ThemeSelector, LlmConnectionConfig, Tooltip } from "../components/common";
 import { RedDot } from "../components/common/RedDot";
 import { SettingsModal } from "../components/modals/SettingsModal";
@@ -71,6 +72,36 @@ export function PreferencesPage({
     } catch (error) {
       console.error("保存自动学习配置失败:", error);
       setLearningConfig(previousLearningConfig); // 回滚
+    }
+  };
+
+  const [audioDebugResult, setAudioDebugResult] = useState<string | null>(null);
+  const [audioDebugRunning, setAudioDebugRunning] = useState(false);
+  const [audioDebugError, setAudioDebugError] = useState<string | null>(null);
+
+  const handleAudioDebug = async () => {
+    setAudioDebugRunning(true);
+    setAudioDebugResult(null);
+    setAudioDebugError(null);
+    try {
+      const result = await invoke<AudioDiagnostics>("debug_audio_recording");
+      setAudioDebugResult(
+        `时长: ${result.duration_secs.toFixed(1)}s\n` +
+        `原始 RMS: ${result.raw_rms.toFixed(4)}（说话时应在 0.01~0.3）\n` +
+        `原始峰值: ${result.raw_peak.toFixed(4)}\n` +
+        `处理后 RMS: ${result.processed_rms.toFixed(4)}\n` +
+        `最终增益: ${result.final_gain.toFixed(2)}x\n` +
+        `采样率: ${result.device_sample_rate}Hz → ${result.target_sample_rate}Hz\n` +
+        `WAV 大小: ${(result.wav_size_bytes / 1024).toFixed(1)}KB\n\n` +
+        `📁 录音已保存到桌面\n` +
+        `提示：将对录音文件进行检查时，请观察原始 RMS 值。\n` +
+        `• 若原始 RMS >= 0.01：麦克风正常，问题在豆包 API\n` +
+        `• 若原始 RMS < 0.01：麦克风问题或录音系统故障`
+      );
+    } catch (err) {
+      setAudioDebugError(String(err));
+    } finally {
+      setAudioDebugRunning(false);
     }
   };
 
@@ -262,6 +293,46 @@ export function PreferencesPage({
               检查
               {updateStatus === "available" && <RedDot size="md" />}
             </button>
+          </div>
+        </div>
+
+        {/* 🎤 录音诊断 */}
+        <div className="space-y-3">
+          <div className="flex items-center gap-2 text-xs font-bold text-stone-500 uppercase tracking-widest">
+            <Mic size={14} />
+            <span>录音诊断</span>
+          </div>
+
+          <div className="p-4 bg-[var(--paper)] border border-[var(--stone)] rounded-2xl space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <div className="text-sm font-bold text-[var(--ink)]">录制测试音频</div>
+                <div className="text-[11px] text-stone-400 font-semibold">
+                  录制 3 秒音频并保存到桌面，用于诊断"无有效语音"等问题
+                </div>
+              </div>
+              <button
+                onClick={handleAudioDebug}
+                disabled={audioDebugRunning}
+                className="px-3 py-2 rounded-xl bg-white border border-[var(--stone)] text-stone-700 font-bold hover:border-stone-400 transition-colors disabled:opacity-50 flex items-center gap-2"
+              >
+                {audioDebugRunning ? <RefreshCw size={14} className="animate-spin" /> : <Mic size={14} />}
+                {audioDebugRunning ? "录音中..." : "录制 3 秒"}
+              </button>
+            </div>
+
+            {audioDebugResult && (
+              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-xl text-xs text-emerald-800 whitespace-pre-line font-mono leading-relaxed">
+                {audioDebugResult}
+              </div>
+            )}
+
+            {audioDebugError && (
+              <div className="flex items-center gap-2 p-3 bg-red-50 border border-red-200 rounded-xl text-xs text-red-700">
+                <AlertCircle size={14} />
+                <span>{audioDebugError}</span>
+              </div>
+            )}
           </div>
         </div>
       </div>

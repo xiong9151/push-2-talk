@@ -4577,6 +4577,45 @@ async fn test_llm_provider(
         .map_err(|e| format!("测试请求失败: {e}"))
 }
 
+/// 录音诊断测试 — 录制 3 秒音频并保存到桌面，返回诊断信息
+#[tauri::command]
+async fn debug_audio_recording(
+    app_handle: AppHandle,
+    state: tauri::State<'_, AppState>,
+) -> Result<audio_recorder::AudioDiagnostics, String> {
+    // 用 AudioRecorder 录制 3 秒
+    let mut recorder = audio_recorder::AudioRecorder::new()
+        .map_err(|e| format!("创建录音器失败: {}", e))?;
+
+    recorder
+        .start_recording(Some(app_handle.clone()))
+        .map_err(|e| format!("开始录音失败: {}", e))?;
+
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+
+    let (wav_data, diagnostics) = recorder
+        .stop_recording_with_diagnostics()
+        .map_err(|e| format!("停止录音失败: {}", e))?;
+
+    // 保存 WAV 到桌面
+    let desktop = std::env::var("USERPROFILE")
+        .map(|p| format!("{}\\Desktop", p))
+        .unwrap_or_else(|_| std::env::temp_dir().to_string_lossy().to_string());
+
+    let timestamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let wav_path = format!("{}\\pushtotalk_debug_{}.wav", desktop, timestamp);
+
+    std::fs::write(&wav_path, &wav_data)
+        .map_err(|e| format!("保存音频文件失败: {}", e))?;
+
+    tracing::info!("录音诊断文件已保存到: {}", wav_path);
+
+    Ok(diagnostics)
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     // 初始化日志
@@ -4932,6 +4971,7 @@ pub fn run() {
             send_text_question,
             show_notification_window,
             test_llm_provider,
+            debug_audio_recording,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

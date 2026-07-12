@@ -119,6 +119,21 @@ export interface AssistantConfig {
   text_processing_system_prompt: string;  // 文本处理提示词（有选中文本时）
 }
 
+// 录音诊断信息
+export interface AudioDiagnostics {
+  duration_secs: number;
+  device_sample_rate: number;
+  target_sample_rate: number;
+  channels: number;
+  raw_sample_count: number;
+  raw_rms: number;
+  raw_peak: number;
+  processed_rms: number;
+  final_gain: number;
+  gain_history: number[];
+  wav_size_bytes: number;
+}
+
 // 应用配置
 export interface AppConfig {
   dashscope_api_key: string;
