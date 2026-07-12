@@ -349,6 +349,8 @@ function App() {
 
   const {
     loadConfig,
+    startApp,
+    buildRuntimeDictionary,
     handleSaveConfig,
     immediatelySaveConfig,
     handleAutostartToggle,
@@ -535,10 +537,39 @@ function App() {
         await new Promise(resolve => setTimeout(resolve, 100));
         const syncToken = configSyncWindowControllerRef.current.begin("initial_load");
         updateSyncWindowSnapshot();
+        let configSnapshot;
         try {
-          await loadConfig();
+          configSnapshot = await loadConfig();
         } finally {
           releaseConfigSyncWindow(syncToken, true);
+        }
+        // 同步窗口已释放，现在异步启动服务（不阻塞 UI）
+        if (configSnapshot?.effectiveAsrConfig && status === "idle") {
+          setTimeout(async () => {
+            try {
+              await startApp({
+                apiKey: "",
+                fallbackApiKey: "",
+                useRealtime: true,
+                enablePostProcess: false,
+                enableDictionaryEnhancement: true,
+                llmConfig: configSnapshot.loadedLlmConfig,
+                smartCommandConfig: null,
+                assistantConfig: configSnapshot.loadedAssistantConfig,
+                asrConfig: configSnapshot.effectiveAsrConfig,
+                dualHotkeyConfig: dualHotkeyConfig,
+                enableMuteOtherApps: enableMuteOtherApps,
+                dictionary: buildRuntimeDictionary(
+                  configSnapshot.loadedDictionary,
+                  configSnapshot.loadedBuiltinDictionaryDomains
+                ),
+                theme: configSnapshot.theme,
+              });
+              setStatus("running");
+            } catch (err) {
+              console.error("启动服务失败:", err);
+            }
+          }, 300);
         }
         // 启动时自动检查更新（只执行一次）
         if (!hasCheckedUpdateOnStartup.current) {

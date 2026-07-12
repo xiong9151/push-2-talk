@@ -472,14 +472,14 @@ export function useAppServiceController({
       }
       // ========== 迁移逻辑结束 ==========
 
+            // ========== 迁移逻辑结束 ==========
+
+      // 仅加载配置到 React 状态，不启动服务（启动服务由 App.tsx 异步执行）
       setApiKey(config.dashscope_api_key);
       setFallbackApiKey(config.siliconflow_api_key || "");
 
-      const loadedAsrConfig: AsrConfig | null = config.asr_config
-        ? {
-            ...config.asr_config,
-            language_mode: config.asr_config.language_mode === "zh" ? "zh" : "auto",
-          }
+      const loadedAsrConfig = config.asr_config
+        ? { ...config.asr_config, language_mode: config.asr_config.language_mode === "zh" ? "zh" : "auto" }
         : null;
 
       let effectiveAsrConfig = loadedAsrConfig;
@@ -489,40 +489,27 @@ export function useAppServiceController({
         effectiveAsrConfig = normalized.config;
         asrDidFallback = normalized.didFallback;
         if (asrDidFallback) {
-          const fallbackName = getAsrProviderDisplayName(FALLBACK_ASR_PROVIDER);
-          const fallbackMessage = `ASR Key 缺失，已自动切换至${fallbackName}`;
-          console.warn(`[配置修复] ${fallbackMessage}`);
-          showToast?.(fallbackMessage, 2600);
+          const fbName = getAsrProviderDisplayName(FALLBACK_ASR_PROVIDER);
+          showToast?.("ASR Key 缺失，已自动切换至" + fbName, 2600);
         }
       }
-      if (effectiveAsrConfig) {
-        setAsrConfig(effectiveAsrConfig);
-      }
+      if (effectiveAsrConfig) setAsrConfig(effectiveAsrConfig);
 
       setUseRealtime(config.use_realtime_asr ?? false);
       setEnablePostProcess(config.enable_llm_post_process ?? false);
       setEnableDictionaryEnhancement(config.enable_dictionary_enhancement ?? false);
 
-      // 智能补齐 llm_config
       const loadedLlmConfig = config.llm_config || DEFAULT_LLM_CONFIG;
       if (!loadedLlmConfig.presets || loadedLlmConfig.presets.length === 0) {
-        console.warn('[配置修复] 检测到空 presets，使用默认值');
         loadedLlmConfig.presets = DEFAULT_LLM_CONFIG.presets;
         loadedLlmConfig.active_preset_id = DEFAULT_LLM_CONFIG.active_preset_id;
-      } else {
-        const activeExists = loadedLlmConfig.presets.find(
-          (p) => p.id === loadedLlmConfig.active_preset_id,
-        );
-        if (!activeExists) {
-          loadedLlmConfig.active_preset_id = loadedLlmConfig.presets[0].id;
-        }
+      } else if (!loadedLlmConfig.presets.find(p => p.id === loadedLlmConfig.active_preset_id)) {
+        loadedLlmConfig.active_preset_id = loadedLlmConfig.presets[0].id;
       }
       setLlmConfig(loadedLlmConfig);
 
-      // 智能补齐 assistant_config
       let loadedAssistantConfig = config.assistant_config || DEFAULT_ASSISTANT_CONFIG;
       if (!loadedAssistantConfig.qa_system_prompt || !loadedAssistantConfig.text_processing_system_prompt) {
-        console.warn('[配置修复] 检测到不完整的 assistant_config，使用默认值');
         loadedAssistantConfig = DEFAULT_ASSISTANT_CONFIG;
       }
       setAssistantConfig(loadedAssistantConfig);
@@ -530,112 +517,44 @@ export function useAppServiceController({
       if (config.dual_hotkey_config) {
         setDualHotkeyConfig(config.dual_hotkey_config);
       } else if (config.hotkey_config && config.hotkey_config.keys.length > 0) {
-        setDualHotkeyConfig({
-          dictation: config.hotkey_config,
-          assistant: { keys: ["alt_left", "space"] },
-        });
+        setDualHotkeyConfig({ dictation: config.hotkey_config, assistant: { keys: ["alt_left", "space"] } });
       } else {
         setDualHotkeyConfig(DEFAULT_DUAL_HOTKEY_CONFIG);
       }
 
-      const loadedLearningConfig = normalizeLearningConfig(
-        config.learning_config || DEFAULT_LEARNING_CONFIG,
-      );
-      setLearningConfig(loadedLearningConfig);
-
-      if (config.close_action) {
-        setCloseAction(config.close_action);
-      }
-
-      try {
-        const autostart = await invoke<boolean>("get_autostart");
-        setEnableAutostart(autostart);
-      } catch (err) {
-        console.error("获取开机自启状态失败:", err);
-      }
+      const loadedLC = normalizeLearningConfig(config.learning_config || DEFAULT_LEARNING_CONFIG);
+      setLearningConfig(loadedLC);
+      if (config.close_action) setCloseAction(config.close_action);
+      try { setEnableAutostart(await invoke("get_autostart")); } catch {}
 
       setEnableMuteOtherApps(config.enable_mute_other_apps ?? false);
       setTheme(config.theme || "light");
 
-      const configDictionary =
-        config.dictionary && Array.isArray(config.dictionary) ? config.dictionary : [];
-
-      // 处理词典：支持新格式 DictionaryEntry[] 和旧格式 string[]
-      let loadedDictionary: DictionaryEntry[];
-      if (configDictionary.length > 0 && typeof configDictionary[0] === "object") {
-        // 新格式：DictionaryEntry[]
-        loadedDictionary = configDictionary as unknown as DictionaryEntry[];
+      const dictArr = Array.isArray(config.dictionary) ? config.dictionary : [];
+      let loadedDict;
+      if (dictArr.length > 0 && typeof dictArr[0] === "object") {
+        loadedDict = dictArr;
       } else {
-        // 旧格式：string[]，需要转换（支持 "word" 和 "word|auto" 格式）
-        const words = (configDictionary as unknown as string[]).filter(
-          (w) => typeof w === "string" && w.trim()
-        );
-        loadedDictionary = words.map(parseEntry);
+        loadedDict = dictArr.filter(w => typeof w === "string" && w.trim()).map(parseEntry);
       }
-      setDictionary(loadedDictionary);
+      setDictionary(loadedDict);
 
-      const loadedBuiltinDictionaryDomains = normalizeBuiltinDictionaryDomains(
-        config.builtin_dictionary_domains || []
-      );
-      setBuiltinDictionaryDomains(loadedBuiltinDictionaryDomains);
+      const loadedDoms = normalizeBuiltinDictionaryDomains(config.builtin_dictionary_domains || []);
+      setBuiltinDictionaryDomains(loadedDoms);
 
-      const loadedDualHotkeyConfig = config.dual_hotkey_config || {
-        dictation:
-          config.hotkey_config ||
-          ({ keys: ["control_left", "meta_left"] as HotkeyKey[] } as const),
-        assistant: { keys: ["alt_left", "space"] as HotkeyKey[] },
+      // 返回配置快照供 App.tsx 异步启动服务
+      return {
+        effectiveAsrConfig: effectiveAsrConfig && isAsrConfigValid(effectiveAsrConfig) ? effectiveAsrConfig : null,
+        loadedLlmConfig,
+        loadedAssistantConfig,
+        loadedDictionary: loadedDict,
+        loadedBuiltinDictionaryDomains: loadedDoms,
+        asrDidFallback,
+        theme: config.theme || "light",
       };
-
-      if (effectiveAsrConfig && isAsrConfigValid(effectiveAsrConfig)) {
-        await new Promise((resolve) => window.setTimeout(resolve, 100));
-        await startApp({
-          apiKey: config.dashscope_api_key,
-          fallbackApiKey: config.siliconflow_api_key || "",
-          useRealtime: config.use_realtime_asr ?? true,
-          enablePostProcess: config.enable_llm_post_process ?? false,
-          enableDictionaryEnhancement: config.enable_dictionary_enhancement ?? true,
-          llmConfig: loadedLlmConfig,
-          smartCommandConfig: null,
-          assistantConfig: loadedAssistantConfig,
-          asrConfig: effectiveAsrConfig,
-          dualHotkeyConfig: loadedDualHotkeyConfig,
-          enableMuteOtherApps: config.enable_mute_other_apps ?? false,
-          dictionary: buildRuntimeDictionary(
-            loadedDictionary,
-            loadedBuiltinDictionaryDomains
-          ),
-          theme: config.theme || "light",
-        });
-        setStatus("running");
-        setError(null);
-
-        // 回退后持久化修正后的配置，避免下次启动重复回退
-        if (asrDidFallback) {
-          try {
-            await saveConfigThroughGateway({
-              apiKey: effectiveAsrConfig.credentials.qwen_api_key,
-              fallbackApiKey: effectiveAsrConfig.credentials.sensevoice_api_key,
-              useRealtime: config.use_realtime_asr ?? true,
-              enablePostProcess: config.enable_llm_post_process ?? false,
-              enableDictionaryEnhancement: config.enable_dictionary_enhancement ?? true,
-              llmConfig: loadedLlmConfig,
-              assistantConfig: loadedAssistantConfig,
-              asrConfig: effectiveAsrConfig,
-              closeAction: config.close_action ?? null,
-              dualHotkeyConfig: loadedDualHotkeyConfig,
-              learningConfig: loadedLearningConfig,
-              enableMuteOtherApps: config.enable_mute_other_apps ?? false,
-              dictionaryEntries: loadedDictionary,
-              builtinDictionaryDomains: loadedBuiltinDictionaryDomains,
-              theme: config.theme || "light",
-            });
-          } catch (err) {
-            console.warn("[配置修复] 回退配置持久化失败:", err);
-          }
-        }
-      }
     } catch (err) {
       console.error("加载配置失败:", err);
+      return null;
     }
   }, [
     setApiKey,
@@ -895,6 +814,7 @@ export function useAppServiceController({
 
   return {
     loadConfig,
+    startApp,
     handleSaveConfig,
     immediatelySaveConfig,
     handleAutostartToggle,
@@ -903,5 +823,6 @@ export function useAppServiceController({
     handleCloseAction,
     applyRuntimeConfig,
     patchConfigFields,
+    buildRuntimeDictionary,
   };
 }
