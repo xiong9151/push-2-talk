@@ -139,7 +139,6 @@ function App() {
   const [showCloseDialog, setShowCloseDialog] = useState(false);
   const [rememberChoice, setRememberChoice] = useState(false);
   const [enableAutostart, setEnableAutostart] = useState(false);
-  const [runAsAdmin, setRunAsAdmin] = useState(false);
   const [enableMuteOtherApps, setEnableMuteOtherApps] = useState(false);
   const [theme, setTheme] = useState("light");
   const [closeAction, setCloseAction] = useState<"close" | "minimize" | null>(null);
@@ -603,11 +602,7 @@ function App() {
       console.error('加载统计数据失败:', error);
     });
 
-    // 加载管理员运行状态
-    invoke<boolean>("get_run_as_admin").then(enabled => {
-      setRunAsAdmin(enabled);
-    }).catch(() => {});
-  }, []);
+    }, []);
   useEffect(() => {
     let interval: ReturnType<typeof setInterval>;
     if (status === "recording") {
@@ -892,16 +887,6 @@ function App() {
             enableAutostart={enableAutostart}
             onToggleAutostart={() => {
               void handleAutostartToggle();
-            }}
-            runAsAdmin={runAsAdmin}
-            onToggleRunAsAdmin={async () => {
-              const newValue = !runAsAdmin;
-              try {
-                await invoke("set_run_as_admin", { enabled: newValue });
-                setRunAsAdmin(newValue);
-              } catch (err) {
-                console.error("设置管理员运行失败:", err);
-              }
             }}
             enableMuteOtherApps={enableMuteOtherApps}
             onSetEnableMuteOtherApps={async (next) => {

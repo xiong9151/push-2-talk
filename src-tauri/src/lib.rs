@@ -3873,65 +3873,6 @@ async fn get_autostart(app: AppHandle) -> Result<bool, String> {
     app.autolaunch().is_enabled().map_err(|e| e.to_string())
 }
 
-/// 设置以管理员身份运行（通过注册表 AppCompatFlags）
-#[tauri::command]
-async fn set_run_as_admin(enabled: bool) -> Result<String, String> {
-    let exe_path = std::env::current_exe().map_err(|e| format!("获取程序路径失败: {}", e))?;
-    let exe_str = exe_path.to_string_lossy().to_string();
-
-    let key_path = "HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers";
-
-    if enabled {
-        // 使用 reg.exe 添加 RUNASADMIN 标志
-        let output = std::process::Command::new("reg")
-            .args(["add", key_path, "/v", &exe_str, "/t", "REG_SZ", "/d", "~ RUNASADMIN", "/f"])
-            .output()
-            .map_err(|e| format!("执行 reg.exe 失败: {}", e))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            return Err(format!("设置管理员启动失败: {}", stderr));
-        }
-        Ok("已启用管理员启动，下次启动生效".to_string())
-    } else {
-        // 删除注册表中的 RUNASADMIN 标志
-        let output = std::process::Command::new("reg")
-            .args(["delete", key_path, "/v", &exe_str, "/f"])
-            .output()
-            .map_err(|e| format!("执行 reg.exe 失败: {}", e))?;
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            // 如果键不存在也视为成功
-            if !stderr.contains("does not exist") {
-                return Err(format!("禁用管理员启动失败: {}", stderr));
-            }
-        }
-        Ok("已禁用管理员启动".to_string())
-    }
-}
-
-/// 获取管理员启动状态
-#[tauri::command]
-async fn get_run_as_admin() -> Result<bool, String> {
-    let exe_path = std::env::current_exe().map_err(|e| format!("获取程序路径失败: {}", e))?;
-    let exe_str = exe_path.to_string_lossy().to_string();
-
-    let key_path = "HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers";
-
-    let output = std::process::Command::new("reg")
-        .args(["query", key_path, "/v", &exe_str])
-        .output()
-        .map_err(|e| format!("查询注册表失败: {}", e))?;
-
-    if !output.status.success() {
-        return Ok(false);
-    }
-
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    Ok(stdout.contains("RUNASADMIN"))
-}
-
 /// 重置热键状态（用于手动修复状态卡死问题）
 #[tauri::command]
 async fn reset_hotkey_state(app_handle: AppHandle) -> Result<String, String> {
@@ -5034,8 +4975,6 @@ pub fn run() {
             show_notification_window,
             test_llm_provider,
             debug_audio_recording,
-            set_run_as_admin,
-            get_run_as_admin,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
