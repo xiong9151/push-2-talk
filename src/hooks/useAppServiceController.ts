@@ -533,7 +533,7 @@ export function useAppServiceController({
       const dictArr = Array.isArray(config.dictionary) ? config.dictionary : [];
       let loadedDict: DictionaryEntry[];
       if (dictArr.length > 0 && typeof dictArr[0] === "object") {
-        loadedDict = dictArr as DictionaryEntry[];
+        loadedDict = dictArr as unknown as DictionaryEntry[];
       } else {
         loadedDict = (dictArr as string[]).filter(w => typeof w === "string" && w.trim()).map(parseEntry);
       }
