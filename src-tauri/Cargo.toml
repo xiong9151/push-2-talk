@@ -90,7 +90,6 @@ windows = { version = "0.58", features = [
     "Win32_UI_Input_KeyboardAndMouse",
     "Win32_UI_WindowsAndMessaging",  # 焦点管理: GetForegroundWindow, SetForegroundWindow, IsWindow
     "Win32_System_Threading",         # 焦点管理: GetCurrentThreadId, AttachThreadInput, GetWindowThreadProcessId
-    "Win32_System_Registry",          # 注册表操作: 管理员启动标志
 ] }
 
 [features]

@@ -3879,41 +3879,32 @@ async fn set_run_as_admin(enabled: bool) -> Result<String, String> {
     let exe_path = std::env::current_exe().map_err(|e| format!("获取程序路径失败: {}", e))?;
     let exe_str = exe_path.to_string_lossy().to_string();
 
-    let key_path = "Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers";
-    let hklm = windows::Win32::UI::Shell::HKEY_CURRENT_USER;
+    let key_path = "HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers";
 
     if enabled {
-        // 写入注册表：设置 RUNASADMIN 标志
-        let value = "~ RUNASADMIN";
-        unsafe {
-            let key = windows::Win32::System::Registry::RegCreateKeyW(
-                hklm,
-                &windows::core::HSTRING::from(key_path),
-            );
-            if let Ok(key) = key {
-                windows::Win32::System::Registry::RegSetValueW(
-                    key,
-                    &windows::core::HSTRING::from(&exe_str),
-                    windows::Win32::System::Registry::REG_SZ,
-                    value.as_bytes(),
-                )
-                .ok()
-                .map_err(|e| format!("写入注册表失败: {}", e))?;
-            }
+        // 使用 reg.exe 添加 RUNASADMIN 标志
+        let output = std::process::Command::new("reg")
+            .args(["add", key_path, "/v", &exe_str, "/t", "REG_SZ", "/d", "~ RUNASADMIN", "/f"])
+            .output()
+            .map_err(|e| format!("执行 reg.exe 失败: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            return Err(format!("设置管理员启动失败: {}", stderr));
         }
         Ok("已启用管理员启动，下次启动生效".to_string())
     } else {
         // 删除注册表中的 RUNASADMIN 标志
-        unsafe {
-            let key = windows::Win32::System::Registry::RegOpenKeyW(
-                hklm,
-                &windows::core::HSTRING::from(key_path),
-            );
-            if let Ok(key) = key {
-                let _ = windows::Win32::System::Registry::RegDeleteValueW(
-                    key,
-                    &windows::core::HSTRING::from(&exe_str),
-                );
+        let output = std::process::Command::new("reg")
+            .args(["delete", key_path, "/v", &exe_str, "/f"])
+            .output()
+            .map_err(|e| format!("执行 reg.exe 失败: {}", e))?;
+
+        if !output.status.success() {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            // 如果键不存在也视为成功
+            if !stderr.contains("does not exist") {
+                return Err(format!("禁用管理员启动失败: {}", stderr));
             }
         }
         Ok("已禁用管理员启动".to_string())
@@ -3926,31 +3917,19 @@ async fn get_run_as_admin() -> Result<bool, String> {
     let exe_path = std::env::current_exe().map_err(|e| format!("获取程序路径失败: {}", e))?;
     let exe_str = exe_path.to_string_lossy().to_string();
 
-    let key_path = "Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers";
-    let hklm = windows::Win32::UI::Shell::HKEY_CURRENT_USER;
+    let key_path = "HKCU\\Software\\Microsoft\\Windows NT\\CurrentVersion\\AppCompatFlags\\Layers";
 
-    unsafe {
-        let key = windows::Win32::System::Registry::RegOpenKeyW(
-            hklm,
-            &windows::core::HSTRING::from(key_path),
-        );
-        if let Ok(key) = key {
-            let mut buffer = [0u8; 1024];
-            let mut size = buffer.len() as u32;
-            let result = windows::Win32::System::Registry::RegQueryValueW(
-                key,
-                &windows::core::HSTRING::from(&exe_str),
-                Some(&mut buffer),
-                &mut size,
-            );
-            if result.is_ok() {
-                let value = std::str::from_utf8(&buffer[..size as usize])
-                    .unwrap_or("");
-                return Ok(value.contains("RUNASADMIN"));
-            }
-        }
+    let output = std::process::Command::new("reg")
+        .args(["query", key_path, "/v", &exe_str])
+        .output()
+        .map_err(|e| format!("查询注册表失败: {}", e))?;
+
+    if !output.status.success() {
+        return Ok(false);
     }
-    Ok(false)
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    Ok(stdout.contains("RUNASADMIN"))
 }
 
 /// 重置热键状态（用于手动修复状态卡死问题）
