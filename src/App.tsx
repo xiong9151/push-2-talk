@@ -597,10 +597,6 @@ function App() {
     // 从 Tauri 后端加载统计数据
     loadUsageStats().then(stats => {
       setUsageStats(stats);
-    }).catch(error => {
-      console.error('加载统计数据失败:', error);
-    });
-
     }).catch(() => { });
   }, []);
   useEffect(() => {
