@@ -242,6 +242,11 @@ function App() {
   useEffect(() => {
     statusRef.current = status;
   }, [status]);
+  // 使用 ref 保持最新状态值，供闭包使用
+  const dualHotkeyConfigRef = useRef(dualHotkeyConfig);
+  useEffect(() => { dualHotkeyConfigRef.current = dualHotkeyConfig; }, [dualHotkeyConfig]);
+  const enableMuteOtherAppsRef = useRef(enableMuteOtherApps);
+  useEffect(() => { enableMuteOtherAppsRef.current = enableMuteOtherApps; }, [enableMuteOtherApps]);
   const dictionaryRef = useRef(dictionary);
   useEffect(() => {
     dictionaryRef.current = dictionary;
@@ -551,8 +556,9 @@ function App() {
         // 同步窗口已释放，现在总是启动热键服务（不阻塞 UI）
         setTimeout(async () => {
           try {
-            const dualHotkey = dualHotkeyConfig;
-            const muteOtherApps = enableMuteOtherApps;
+            // 从 ref 读取最新状态（避免闭包捕获过期值）
+            const dualHotkey = dualHotkeyConfigRef.current;
+            const muteOtherApps = enableMuteOtherAppsRef.current;
             await startApp({
               apiKey: configSnapshot?.asrApiKey ?? "",
               fallbackApiKey: configSnapshot?.asrFallbackApiKey ?? "",
