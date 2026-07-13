@@ -1,7 +1,6 @@
 // src/App.tsx
 import { useState, useEffect, useRef, useCallback } from "react";
 import { getVersion } from "@tauri-apps/api/app";
-import { invoke } from "@tauri-apps/api/core";
 import {
   CheckCircle2,
   AlertCircle,
