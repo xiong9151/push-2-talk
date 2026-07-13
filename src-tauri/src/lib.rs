@@ -3536,9 +3536,20 @@ async fn stop_app(app_handle: AppHandle) -> Result<String, String> {
 
 #[tauri::command]
 async fn hide_to_tray(app_handle: AppHandle) -> Result<String, String> {
+    // 隐藏主界面窗口，释放渲染资源
     if let Some(window) = app_handle.get_webview_window("main") {
         window.hide().map_err(|e| e.to_string())?;
     }
+    // 隐藏结果面板窗口，释放渲染管线
+    if let Some(window) = app_handle.get_webview_window("result_panel") {
+        let _ = window.hide();
+    }
+    // 隐藏通知窗口，释放渲染管线
+    if let Some(window) = app_handle.get_webview_window("notification") {
+        let _ = window.hide();
+    }
+    // 注意：overlay（录音悬浮窗）仅在录音时按需显示，由代码控制显隐
+    // 各处 hide_overlay/show_overlay 逻辑不变，最小化到托盘不影响录音功能
     Ok("已最小化到托盘".to_string())
 }
 
