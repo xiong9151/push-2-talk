@@ -3892,10 +3892,6 @@ async fn reset_hotkey_state(app_handle: AppHandle) -> Result<String, String> {
     Ok("热键状态已重置".to_string())
 }
 
-}
-
-}
-
 /// 获取热键服务是否激活
 #[tauri::command]
 async fn get_hotkey_service_active(app_handle: AppHandle) -> Result<bool, String> {
