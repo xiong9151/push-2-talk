@@ -1,4 +1,4 @@
-import { Download, Power, RefreshCw, SlidersHorizontal, VolumeX, GraduationCap, Settings2, HelpCircle, Mic, AlertCircle } from "lucide-react";
+import { Download, Power, RefreshCw, SlidersHorizontal, VolumeX, GraduationCap, Settings2, HelpCircle, Mic, AlertCircle, Shield } from "lucide-react";
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AppStatus, UpdateStatus, LearningConfig, SharedLlmConfig, AudioDiagnostics } from "../types";
@@ -12,6 +12,9 @@ export type PreferencesPageProps = {
 
   enableAutostart: boolean;
   onToggleAutostart: () => void;
+
+  runAsAdmin: boolean;
+  onToggleRunAsAdmin: () => void;
 
   enableMuteOtherApps: boolean;
   onSetEnableMuteOtherApps: (next: boolean) => Promise<void>;
@@ -36,6 +39,8 @@ export function PreferencesPage({
   status,
   enableAutostart,
   onToggleAutostart,
+  runAsAdmin,
+  onToggleRunAsAdmin,
   enableMuteOtherApps,
   onSetEnableMuteOtherApps,
   theme,
@@ -131,6 +136,28 @@ export function PreferencesPage({
             </div>
           </div>
           <Toggle checked={enableAutostart} onCheckedChange={() => onToggleAutostart()} size="sm" variant="green" />
+        </div>
+
+        <div className="flex items-center justify-between p-4 bg-[var(--paper)] border border-[var(--stone)] rounded-2xl">
+          <div className="flex items-center gap-3">
+            <div
+              className={[
+                "p-2 rounded-xl",
+                runAsAdmin
+                  ? "bg-[rgba(34,197,94,0.12)] text-green-500"
+                  : "bg-white border border-[var(--stone)] text-stone-500",
+              ].join(" ")}
+            >
+              <Shield size={16} />
+            </div>
+            <div>
+              <div className="text-sm font-bold text-[var(--ink)]">以管理员身份运行</div>
+              <div className="text-[11px] text-stone-400 font-semibold">
+                {runAsAdmin ? "下次启动以管理员权限运行" : "以普通用户权限运行"}
+              </div>
+            </div>
+          </div>
+          <Toggle checked={runAsAdmin} onCheckedChange={onToggleRunAsAdmin} size="sm" variant="green" />
         </div>
 
         <div className="flex items-center justify-between p-4 bg-[var(--paper)] border border-[var(--stone)] rounded-2xl">
