@@ -152,6 +152,26 @@ export interface AppConfig {
   dictionary: string[];  // 简化格式："word" 或 "word|auto"
   builtin_dictionary_domains: string[];  // 内置词库领域列表
   theme: string;
+  custom_asr_providers: CustomAsrProvider[];
+}
+
+// 自定义 ASR 提供商配置
+export type CustomAsrAuthType = 'api_key' | 'bearer' | 'custom_header';
+export type CustomAsrMode = 'http' | 'realtime';
+
+export interface CustomAsrProvider {
+  name: string;
+  endpoint: string;
+  api_key: string;
+  auth_type: CustomAsrAuthType;
+  auth_header_name: string;
+  model_id: string;
+  modes: CustomAsrMode[];
+  language: string;
+  sample_rate: number;
+  response_format: string;
+  custom_config: string;
+  enabled: boolean;
 }
 
 // 词库条目

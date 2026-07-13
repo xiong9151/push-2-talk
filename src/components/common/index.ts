@@ -7,4 +7,5 @@ export * from "./Tooltip";
 export * from "./ThemeSelector";
 export * from "./LlmConnectionConfig";
 export * from "./GlobalNoticeBar";
+export * from "./SmartToast";
 

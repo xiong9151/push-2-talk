@@ -2,7 +2,7 @@ pub mod doubao_ime;
 pub mod http;
 mod race_strategy;
 pub mod realtime;
-mod utils;
+pub mod utils;
 
 pub use doubao_ime::{
     DeviceCredentials as DoubaoImeCredentials, DoubaoImeClient, DoubaoImeClientConfig,

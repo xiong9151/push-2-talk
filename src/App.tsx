@@ -10,6 +10,7 @@ import type {
   AppStatus,
   AsrConfig,
   AssistantConfig,
+  CustomAsrProvider,
   DualHotkeyConfig,
   LearningConfig,
   LlmConfig,
@@ -47,6 +48,7 @@ import { HistoryPage } from "./pages/HistoryPage";
 import { HotkeysPage } from "./pages/HotkeysPage";
 import { PreferencesPage } from "./pages/PreferencesPage";
 import { HelpPage } from "./pages/HelpPage";
+import { CustomAsrPage } from "./pages/CustomAsrPage";
 import { ConfigSaveContext, type ConfigSyncStatus, type ConfigOverrides } from "./contexts/ConfigSaveContext";
 import {
   createConfigSyncWindowController,
@@ -142,6 +144,7 @@ function App() {
   const [theme, setTheme] = useState("light");
   const [closeAction, setCloseAction] = useState<"close" | "minimize" | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [customAsrProviders, setCustomAsrProviders] = useState<CustomAsrProvider[]>([]);
   const {
     updateStatus,
     updateInfo,
@@ -318,6 +321,7 @@ function App() {
     setDictionary,
     setDualHotkeyConfig,
     setBuiltinDictionaryDomains,
+    setCustomAsrProviders,
     onExternalConfigUpdated: handleExternalConfigUpdated,
     onBuiltinDictionaryUpdated: handleBuiltinDictionaryUpdated,
     setHistory,
@@ -398,6 +402,7 @@ function App() {
     setShowCloseDialog,
     setShowSuccessToast,
     showToast,
+    setCustomAsrProviders,
     onBeforeImmediateSave: cancelAutoSaveDebounce,
   });
   useEffect(() => {
@@ -726,6 +731,7 @@ function App() {
     dualHotkeyConfig,
     learningConfig,
     theme,
+    customAsrProviders,
   ]);
 
   const formatTime = (seconds: number): string => {
@@ -906,6 +912,13 @@ function App() {
         );
       case "help":
         return <HelpPage />;
+      case "custom-asr":
+        return (
+          <CustomAsrPage
+            providers={customAsrProviders}
+            onChange={setCustomAsrProviders}
+          />
+        );
       default:
         return null;
     }

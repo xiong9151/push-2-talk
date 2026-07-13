@@ -41,6 +41,7 @@ use streaming_recorder::StreamingRecorder;
 use text_inserter::TextInserter;
 use usage_stats::UsageStats;
 
+use base64::{engine::general_purpose, Engine as _};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{
@@ -780,6 +781,7 @@ async fn save_config(
     dictionary: Option<Vec<String>>,
     builtin_dictionary_domains: Option<Vec<String>>,
     theme: Option<String>,
+    custom_asr_providers: Option<Vec<config::CustomAsrProvider>>,
 ) -> Result<String, String> {
     let config = mutate_persisted_config_with_result(|existing| {
         tracing::info!("保存配置...");
@@ -867,6 +869,8 @@ async fn save_config(
             builtin_dictionary_domains: builtin_dictionary_domains
                 .unwrap_or_else(|| existing.builtin_dictionary_domains.clone()),
             theme: theme.unwrap_or_else(|| existing.theme.clone()),
+            custom_asr_providers: custom_asr_providers
+                .unwrap_or_else(|| existing.custom_asr_providers.clone()),
         };
 
         Ok(())
@@ -4588,6 +4592,114 @@ async fn test_llm_provider(
         .map_err(|e| format!("测试请求失败: {e}"))
 }
 
+/// 测试自定义 ASR 提供商
+///
+/// 发送内置测试音频到指定端点，返回识别结果
+#[tauri::command]
+async fn test_custom_asr(config: config::CustomAsrProvider) -> Result<String, String> {
+    // 读取内置测试音频
+    let audio_data = include_bytes!("../resources/test_asr.wav");
+    let audio_base64 = general_purpose::STANDARD.encode(audio_data);
+
+    // 构建请求体
+    let mut body = serde_json::json!({
+        "model": config.model_id,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_audio",
+                        "input_audio": {
+                            "data": format!("data:audio/wav;base64,{}", audio_base64)
+                        }
+                    }
+                ]
+            }
+        ],
+        "asr_options": {
+            "language": config.language
+        }
+    });
+
+    // 合并自定义配置
+    if !config.custom_config.trim().is_empty() {
+        if let Ok(custom) = serde_json::from_str::<serde_json::Value>(&config.custom_config) {
+            if let Some(obj) = custom.as_object() {
+                for (k, v) in obj {
+                    body[k] = v.clone();
+                }
+            }
+        }
+    }
+
+    // 构建请求
+    let client = asr::utils::create_http_client();
+    let mut req = client.post(&config.endpoint).json(&body);
+
+    // 根据认证方式设置请求头
+    match config.auth_type {
+        config::CustomAsrAuthType::ApiKey => {
+            req = req.header("api-key", &config.api_key);
+        }
+        config::CustomAsrAuthType::Bearer => {
+            req = req.header("Authorization", format!("Bearer {}", config.api_key));
+        }
+        config::CustomAsrAuthType::CustomHeader => {
+            let header_name = if config.auth_header_name.is_empty() {
+                "Authorization".to_string()
+            } else {
+                config.auth_header_name.clone()
+            };
+            req = req.header(&header_name, &config.api_key);
+        }
+    }
+
+    let response = req.send().await.map_err(|e| format!("请求失败: {}", e))?;
+    let status = response.status();
+    let text = response.text().await.map_err(|e| format!("读取响应失败: {}", e))?;
+
+    if !status.is_success() {
+        return Err(format!("API 返回错误 ({}): {}", status.as_u16(), text));
+    }
+
+    // 解析响应
+    let result: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| format!("解析响应 JSON 失败: {}", e))?;
+
+    // 尝试从 choices[0].message.content 提取（标准 OpenAI 格式）
+    if let Some(content) = result["choices"][0]["message"]["content"].as_str() {
+        if !content.is_empty() {
+            return Ok(content.to_string());
+        }
+    }
+    // 尝试从 choices[0].delta.content 提取（流式格式的最终结果）
+    if let Some(content) = result["choices"][0]["delta"]["content"].as_str() {
+        if !content.is_empty() {
+            return Ok(content.to_string());
+        }
+    }
+    // 尝试从 text 提取
+    if let Some(text_val) = result["text"].as_str() {
+        if !text_val.is_empty() {
+            return Ok(text_val.to_string());
+        }
+    }
+    // 尝试从 result.text 提取
+    if let Some(text_val) = result["result"]["text"].as_str() {
+        if !text_val.is_empty() {
+            return Ok(text_val.to_string());
+        }
+    }
+
+    // 如果都找不到，返回原始 JSON 让用户自己看
+    if text.len() < 500 {
+        Ok(text)
+    } else {
+        Err(format!("无法从响应中提取文本，原始响应过长 ({} 字符)", text.len()))
+    }
+}
+
 /// 录音诊断测试 — 录制 3 秒音频并保存到桌面，返回诊断信息
 #[tauri::command]
 async fn debug_audio_recording(
@@ -4985,6 +5097,7 @@ pub fn run() {
             send_text_question,
             show_notification_window,
             test_llm_provider,
+            test_custom_asr,
             debug_audio_recording,
         ])
         .run(tauri::generate_context!())

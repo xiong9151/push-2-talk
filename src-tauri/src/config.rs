@@ -318,6 +318,82 @@ impl Default for HotkeyConfig {
 }
 
 // ============================================================================
+// 自定义 ASR 提供商配置
+// ============================================================================
+
+/// 自定义 ASR 提供商认证方式
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CustomAsrAuthType {
+    /// 使用 api-key 请求头
+    ApiKey,
+    /// 使用 Bearer token
+    Bearer,
+    /// 自定义请求头
+    CustomHeader,
+}
+
+impl Default for CustomAsrAuthType {
+    fn default() -> Self {
+        Self::ApiKey
+    }
+}
+
+/// 自定义 ASR 提供商传输模式
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CustomAsrMode {
+    Http,
+    Realtime,
+}
+
+/// 自定义 ASR 提供商配置
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CustomAsrProvider {
+    /// 显示名称
+    pub name: String,
+    /// 服务端点 URL
+    pub endpoint: String,
+    /// API Key
+    #[serde(default)]
+    pub api_key: String,
+    /// 认证方式
+    #[serde(default)]
+    pub auth_type: CustomAsrAuthType,
+    /// 自定义认证头名称（auth_type=CustomHeader 时使用）
+    #[serde(default)]
+    pub auth_header_name: String,
+    /// 模型 ID
+    pub model_id: String,
+    /// 支持的传输模式
+    #[serde(default = "default_custom_asr_modes")]
+    pub modes: Vec<CustomAsrMode>,
+    /// 语言
+    #[serde(default = "default_custom_asr_language")]
+    pub language: String,
+    /// 采样率
+    #[serde(default = "default_custom_asr_sample_rate")]
+    pub sample_rate: u32,
+    /// 响应格式
+    #[serde(default = "default_custom_asr_response_format")]
+    pub response_format: String,
+    /// 自定义配置（JSON 文本，拼接到请求体中）
+    #[serde(default)]
+    pub custom_config: String,
+    /// 是否启用
+    #[serde(default = "default_custom_asr_enabled")]
+    pub enabled: bool,
+}
+
+fn default_custom_asr_modes() -> Vec<CustomAsrMode> {
+    vec![CustomAsrMode::Http]
+}
+fn default_custom_asr_language() -> String { "auto".to_string() }
+fn default_custom_asr_sample_rate() -> u32 { 16000 }
+fn default_custom_asr_response_format() -> String { "json".to_string() }
+fn default_custom_asr_enabled() -> bool { true }
+
+// ============================================================================
 // 双快捷键配置（新增）
 // ============================================================================
 
@@ -606,6 +682,9 @@ pub struct AppConfig {
     /// 悬浮窗主题 ("light" | "dark")
     #[serde(default = "default_theme")]
     pub theme: String,
+    /// 自定义 ASR 提供商列表
+    #[serde(default)]
+    pub custom_asr_providers: Vec<CustomAsrProvider>,
 }
 
 fn default_theme() -> String {
@@ -1297,6 +1376,7 @@ impl AppConfig {
             dictionary: Vec::new(),
             builtin_dictionary_domains: Vec::new(),
             theme: default_theme(),
+            custom_asr_providers: Vec::new(),
         }
     }
 

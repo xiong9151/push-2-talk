@@ -13,6 +13,7 @@ import {
   MessageSquare,
   HelpCircle,
   Zap,
+  Puzzle,
 } from "lucide-react";
 import { RedDot } from "../common/RedDot";
 
@@ -101,6 +102,15 @@ export function Sidebar({
         >
           <Mic className="shrink-0 w-5 h-5" />
           <span className={navTextClass}>语音识别引擎</span>
+        </button>
+
+        <button
+          onClick={() => onNavigate("custom-asr")}
+          className={navItem("custom-asr")}
+          title="自定义 ASR 提供商"
+        >
+          <Puzzle className="shrink-0 w-5 h-5" />
+          <span className={navTextClass}>自定义 ASR</span>
         </button>
 
         <button

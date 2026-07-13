@@ -7,6 +7,7 @@ import type {
   AsrConfig,
   AsrLanguageMode,
   AssistantConfig,
+  CustomAsrProvider,
   DictionaryEntry,
   DualHotkeyConfig,
   LearningConfig,
@@ -75,6 +76,7 @@ type SaveConfigGatewayOverrides = {
   storageDictionary?: string[];
   builtinDictionaryDomains?: string[];
   theme?: string;
+  customAsrProviders?: CustomAsrProvider[];
 };
 
 type ConfigFieldPatchPayload = {
@@ -102,6 +104,7 @@ type ResolvedSaveConfig = {
   runtimeDictionary: string[];
   builtinDictionaryDomains: string[];
   theme: string;
+  customAsrProviders: CustomAsrProvider[];
 };
 
 export type UseAppServiceControllerParams = {
@@ -168,6 +171,7 @@ export type UseAppServiceControllerParams = {
 
   /** 即时保存前的回调，用于取消 debounce timer */
   onBeforeImmediateSave?: () => void;
+  setCustomAsrProviders?: React.Dispatch<React.SetStateAction<CustomAsrProvider[]>>;
 };
 
 export function useAppServiceController({
@@ -212,6 +216,7 @@ export function useAppServiceController({
   setShowSuccessToast,
   showToast,
   onBeforeImmediateSave,
+  setCustomAsrProviders,
 }: UseAppServiceControllerParams) {
   const flashSuccessToast = useCallback(() => {
     setShowSuccessToast(true);
@@ -318,6 +323,7 @@ export function useAppServiceController({
         ),
         builtinDictionaryDomains: finalBuiltinDictionaryDomains,
         theme: finalTheme,
+        customAsrProviders: overrides.customAsrProviders ?? [],
       };
     },
     [
@@ -360,6 +366,7 @@ export function useAppServiceController({
         dictionary: resolved.storageDictionary,
         builtinDictionaryDomains: resolved.builtinDictionaryDomains,
         theme: resolved.theme,
+        customAsrProviders: resolved.customAsrProviders,
       });
 
       return resolved;
@@ -542,6 +549,11 @@ export function useAppServiceController({
       const loadedDoms = normalizeBuiltinDictionaryDomains(config.builtin_dictionary_domains || []);
       setBuiltinDictionaryDomains(loadedDoms);
 
+      // 加载自定义 ASR 提供商
+      if (setCustomAsrProviders && config.custom_asr_providers) {
+        setCustomAsrProviders(config.custom_asr_providers);
+      }
+
       // 返回配置快照供 App.tsx 异步启动服务
       return {
         effectiveAsrConfig: effectiveAsrConfig && isAsrConfigValid(effectiveAsrConfig) ? effectiveAsrConfig : null,
@@ -579,6 +591,7 @@ export function useAppServiceController({
     startApp,
     saveConfigThroughGateway,
     showToast,
+    setCustomAsrProviders,
   ]);
 
   const handleSaveConfig = useCallback(async () => {

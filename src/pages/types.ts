@@ -8,4 +8,5 @@ export type AppPage =
   | "preferences"
   | "dictionary"
   | "history"
-  | "help";
+  | "help"
+  | "custom-asr";

@@ -8,6 +8,7 @@ import type {
   AppStatus,
   AsrConfig,
   AssistantConfig,
+  CustomAsrProvider,
   DictionaryEntry,
   DualHotkeyConfig,
   HistoryRecord,
@@ -59,6 +60,7 @@ export type UseTauriEventListenersParams = {
   setDictionary?: React.Dispatch<React.SetStateAction<DictionaryEntry[]>>;
   setDualHotkeyConfig?: React.Dispatch<React.SetStateAction<DualHotkeyConfig>>;
   setBuiltinDictionaryDomains?: React.Dispatch<React.SetStateAction<string[]>>;
+  setCustomAsrProviders?: React.Dispatch<React.SetStateAction<CustomAsrProvider[]>>;
   onExternalConfigUpdated?: (config: AppConfig) => void;
   onBuiltinDictionaryUpdated?: () => void;
 
@@ -99,6 +101,7 @@ export function useTauriEventListeners({
   setDictionary,
   setDualHotkeyConfig,
   setBuiltinDictionaryDomains,
+  setCustomAsrProviders,
   onExternalConfigUpdated,
   onBuiltinDictionaryUpdated,
   setHistory,
@@ -285,6 +288,10 @@ export function useTauriEventListeners({
             setBuiltinDictionaryDomains(
               normalizeBuiltinDictionaryDomains(config.builtin_dictionary_domains || [])
             );
+          }
+
+          if (setCustomAsrProviders && config.custom_asr_providers) {
+            setCustomAsrProviders(config.custom_asr_providers);
           }
         }))) return;
 
