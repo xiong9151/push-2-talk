@@ -308,17 +308,22 @@ export function useTauriEventListeners({
         }))) return;
 
         if (!(await registerListener("close_requested", async () => {
+          // 点击叉号始终最小化到系统托盘
+          // 如需彻底退出，请在系统托盘右键菜单中选择"退出"
           try {
-            const config = await invoke<AppConfig>("load_config");
-            if (config.close_action === "close") {
-              await invoke("quit_app");
-            } else if (config.close_action === "minimize") {
-              await invoke("hide_to_tray");
-            } else {
+            await invoke("hide_to_tray");
+          } catch {
+            // 如果 hide_to_tray 失败，回退到原来的逻辑
+            try {
+              const config = await invoke<AppConfig>("load_config");
+              if (config.close_action === "close") {
+                await invoke("quit_app");
+              } else {
+                setShowCloseDialog(true);
+              }
+            } catch {
               setShowCloseDialog(true);
             }
-          } catch {
-            setShowCloseDialog(true);
           }
         }))) return;
       } catch (err) {
