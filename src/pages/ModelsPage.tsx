@@ -546,6 +546,33 @@ export function ModelsPage({
               </div>
 
               <div className="space-y-2">
+                <label className="text-sm font-bold text-[var(--ink)] ml-1">思考强度 (Reasoning Effort)</label>
+                <select
+                  value={editingProvider.reasoning_effort ?? ""}
+                  onChange={e => setEditingProvider({ ...editingProvider, reasoning_effort: e.target.value || undefined })}
+                  className="w-full px-4 py-3 bg-[var(--paper)] border-2 border-transparent focus:bg-white focus:border-[var(--steel)] rounded-xl text-sm transition-all focus:outline-none"
+                >
+                  <option value="">默认（不设置）</option>
+                  <option value="low">低 (low)</option>
+                  <option value="medium">中 (medium)</option>
+                  <option value="high">高 (high)</option>
+                </select>
+                <p className="text-xs text-stone-400 ml-1">控制模型的思考深度，高值会消耗更多 token 但可能获得更准确的回答</p>
+              </div>
+
+              <div className="space-y-2">
+                <label className="text-sm font-bold text-[var(--ink)] ml-1">自定义请求体 JSON</label>
+                <textarea
+                  value={editingProvider.extra_body ?? ""}
+                  onChange={e => setEditingProvider({ ...editingProvider, extra_body: e.target.value || undefined })}
+                  className="w-full px-4 py-3 bg-[var(--paper)] border-2 border-transparent focus:bg-white focus:border-[var(--steel)] rounded-xl text-sm transition-all focus:outline-none font-mono min-h-[100px]"
+                  placeholder='例如：&#10;{&#10;  "top_p": 0.9,&#10;  "frequency_penalty": 0.5,&#10;  "presence_penalty": 0.3&#10;}'
+                  spellCheck={false}
+                />
+                <p className="text-xs text-stone-400 ml-1">JSON 格式，将合并到请求体中。可覆盖或添加任意参数</p>
+              </div>
+
+              <div className="space-y-2">
                 <label className="text-sm font-bold text-[var(--ink)] ml-1">API Key</label>
                 <ApiKeyInput
                   value={editingProvider.api_key}

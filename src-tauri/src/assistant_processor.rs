@@ -33,7 +33,9 @@ impl AssistantProcessor {
         let resolved = config.resolve_llm(shared);
         let client_config =
             OpenAiClientConfig::new(&resolved.endpoint, &resolved.api_key, &resolved.model)
-                .with_timeout_secs(Self::ASSISTANT_TIMEOUT_SECS);
+                .with_timeout_secs(Self::ASSISTANT_TIMEOUT_SECS)
+                .with_reasoning_effort(resolved.reasoning_effort.clone())
+                .with_extra_body(resolved.extra_body.clone());
         let client = OpenAiClient::new(client_config);
 
         Self {

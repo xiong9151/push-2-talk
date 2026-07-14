@@ -90,7 +90,9 @@ impl LlmPostProcessor {
     pub fn new(config: LlmConfig) -> Self {
         let resolved = config.resolve_polishing();
         let client_config =
-            OpenAiClientConfig::new(&resolved.endpoint, &resolved.api_key, &resolved.model);
+            OpenAiClientConfig::new(&resolved.endpoint, &resolved.api_key, &resolved.model)
+            .with_reasoning_effort(resolved.reasoning_effort.clone())
+            .with_extra_body(resolved.extra_body.clone());
         let client = OpenAiClient::new(client_config);
         let config_hash = Self::compute_config_hash(&config);
 

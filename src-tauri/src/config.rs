@@ -791,8 +791,15 @@ pub struct LlmProvider {
     pub id: String,
     pub name: String,
     pub endpoint: String,
+    #[serde(default)]
     pub api_key: String,
     pub default_model: String,
+    /// 思考强度（reasoning_effort），如 "low" / "medium" / "high"
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+    /// 自定义请求体 JSON（附加到请求体中的额外字段）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_body: Option<String>,
 }
 
 /// 共享 LLM 配置
@@ -934,6 +941,10 @@ pub struct ResolvedLlmClientConfig {
     pub endpoint: String,
     pub api_key: String,
     pub model: String,
+    /// 思考强度（来自对应 provider 的配置）
+    pub reasoning_effort: Option<String>,
+    /// 自定义请求体 JSON（来自对应 provider 的配置）
+    pub extra_body: Option<String>,
 }
 
 impl LlmFeatureConfig {
@@ -961,6 +972,8 @@ impl LlmFeatureConfig {
                 ),
                 api_key: self.api_key.clone().unwrap_or_default(),
                 model: self.model.clone().unwrap_or_default(),
+                reasoning_effort: None,
+                extra_body: None,
             };
         }
 
@@ -997,6 +1010,8 @@ impl LlmFeatureConfig {
                     endpoint: normalize_chat_completions_endpoint(&provider.endpoint),
                     api_key: provider.api_key.clone(),
                     model,
+                    reasoning_effort: provider.reasoning_effort.clone(),
+                    extra_body: provider.extra_body.clone(),
                 };
             }
 
@@ -1010,6 +1025,8 @@ impl LlmFeatureConfig {
                     endpoint: normalize_chat_completions_endpoint(&first_provider.endpoint),
                     api_key: first_provider.api_key.clone(),
                     model,
+                    reasoning_effort: first_provider.reasoning_effort.clone(),
+                    extra_body: first_provider.extra_body.clone(),
                 };
             }
         }
@@ -1035,6 +1052,8 @@ impl LlmFeatureConfig {
                 .clone()
                 .unwrap_or_else(|| shared.api_key.clone().unwrap_or_default()),
             model: self.model.clone().unwrap_or(default_model),
+            reasoning_effort: None,
+            extra_body: None,
         }
     }
 
@@ -1112,6 +1131,8 @@ impl LlmConfig {
                         endpoint: normalize_chat_completions_endpoint(&provider.endpoint),
                         api_key: provider.api_key.clone(),
                         model,
+                        reasoning_effort: provider.reasoning_effort.clone(),
+                        extra_body: provider.extra_body.clone(),
                     };
                 }
                 tracing::warn!(
@@ -1727,6 +1748,8 @@ impl AppConfig {
                             id: polishing_id.clone(),
                             name: "默认提供商 (迁移)".to_string(),
                             endpoint: polishing_endpoint,
+                            reasoning_effort: None,
+                            extra_body: None,
                             api_key: polishing_api_key,
                             default_model: config
                                 .llm_config

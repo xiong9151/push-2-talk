@@ -128,6 +128,12 @@ pub struct OpenAiClientConfig {
     /// 请求超时秒数（默认 30 秒）
     #[serde(default)]
     pub timeout_secs: Option<u64>,
+    /// 思考强度（reasoning_effort）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<String>,
+    /// 自定义请求体 JSON（附加到请求体中的额外字段）
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub extra_body: Option<String>,
 }
 
 impl OpenAiClientConfig {
@@ -141,7 +147,21 @@ impl OpenAiClientConfig {
             api_key: api_key.into(),
             model: model.into(),
             timeout_secs: None,
+            reasoning_effort: None,
+            extra_body: None,
         }
+    }
+
+    /// Set reasoning_effort
+    pub fn with_reasoning_effort(mut self, effort: Option<String>) -> Self {
+        self.reasoning_effort = effort;
+        self
+    }
+
+    /// Set extra_body JSON
+    pub fn with_extra_body(mut self, json: Option<String>) -> Self {
+        self.extra_body = json;
+        self
     }
 
     /// 设置自定义请求超时
@@ -212,12 +232,32 @@ impl OpenAiClient {
             })
             .collect();
 
-        let request_body = serde_json::json!({
+        let mut request_body = serde_json::json!({
             "model": self.config.model,
             "messages": messages_json,
             "max_tokens": options.max_tokens,
             "temperature": options.temperature
         });
+
+        // 添加 reasoning_effort（如果配置了）
+        if let Some(ref effort) = self.config.reasoning_effort {
+            if !effort.is_empty() {
+                request_body["reasoning_effort"] = serde_json::Value::String(effort.clone());
+            }
+        }
+
+        // 合并自定义请求体 JSON
+        if let Some(ref extra) = self.config.extra_body {
+            if !extra.trim().is_empty() {
+                if let Ok(extra_json) = serde_json::from_str::<Value>(extra) {
+                    if let Some(obj) = extra_json.as_object() {
+                        for (k, v) in obj {
+                            request_body[k] = v.clone();
+                        }
+                    }
+                }
+            }
+        }
 
         // 打印完整请求信息用于调试
         tracing::info!(

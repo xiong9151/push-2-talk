@@ -26,7 +26,9 @@ pub struct LlmJudge {
 impl LlmJudge {
     /// 创建新的 LLM 判断器
     pub fn new(endpoint: &str, api_key: &str, model: &str) -> Self {
-        let config = OpenAiClientConfig::new(endpoint, api_key, model);
+        let config = OpenAiClientConfig::new(endpoint, api_key, model)
+            .with_reasoning_effort(None)
+            .with_extra_body(None);
         Self {
             client: OpenAiClient::new(config),
         }

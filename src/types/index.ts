@@ -73,6 +73,8 @@ export interface LlmProvider {
   endpoint: string;
   api_key: string;
   default_model: string;
+  reasoning_effort?: string;  // 思考强度，如 "low" / "medium" / "high"
+  extra_body?: string;  // 自定义请求体 JSON
 }
 
 // 共享 LLM 配置（重构：支持多提供商）
