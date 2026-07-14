@@ -552,7 +552,8 @@ export function ModelsPage({
                   onChange={e => setEditingProvider({ ...editingProvider, reasoning_effort: e.target.value || undefined })}
                   className="w-full px-4 py-3 bg-[var(--paper)] border-2 border-transparent focus:bg-white focus:border-[var(--steel)] rounded-xl text-sm transition-all focus:outline-none"
                 >
-                  <option value="">默认（不设置）</option>
+                  <option value="">默认（由模型决定）</option>
+                  <option value="none">关闭 (none)</option>
                   <option value="low">低 (low)</option>
                   <option value="medium">中 (medium)</option>
                   <option value="high">高 (high)</option>

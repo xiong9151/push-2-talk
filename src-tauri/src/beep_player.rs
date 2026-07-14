@@ -1,6 +1,5 @@
 use rodio::{OutputStream, OutputStreamHandle, Sink, Source};
 use std::io::Cursor;
-use std::time::Duration;
 
 // 在编译时嵌入提示音 WAV 文件
 const START_BEEP: &[u8] = include_bytes!("../resources/start_beep.wav");

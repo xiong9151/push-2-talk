@@ -1807,6 +1807,8 @@ impl AppConfig {
                             endpoint: polishing_endpoint,
                             api_key: polishing_api_key,
                             default_model: polishing_model.clone(),
+                            reasoning_effort: None,
+                            extra_body: None,
                         };
 
                         let assistant_provider = LlmProvider {
@@ -1815,6 +1817,8 @@ impl AppConfig {
                             endpoint: assistant_endpoint,
                             api_key: assistant_api_key,
                             default_model: assistant_model.clone(),
+                            reasoning_effort: None,
+                            extra_body: None,
                         };
 
                         config.llm_config.shared.providers.push(polishing_provider);
