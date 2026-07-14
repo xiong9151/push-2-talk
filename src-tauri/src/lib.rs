@@ -36,7 +36,7 @@ use futures_util::FutureExt;
 use hotkey_service::HotkeyService;
 use llm_post_processor::LlmPostProcessor;
 use openai_client::{ChatOptions, Message, OpenAiClient, OpenAiClientConfig};
-use pipeline::{NormalPipeline, TranscriptionContext, TranscriptionResultItem};
+use pipeline::{NormalPipeline, TranscriptionContext};
 use streaming_recorder::StreamingRecorder;
 use text_inserter::TextInserter;
 use usage_stats::UsageStats;
@@ -3425,7 +3425,7 @@ async fn handle_transcription_result(
             TranscriptionContext::empty(),
             target_hwnd,
             tnl_enabled,
-            llm_config.as_ref(),
+            Some(&llm_config),
             enable_result_selection,
         )
         .await;
