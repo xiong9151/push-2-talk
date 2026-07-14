@@ -1,5 +1,5 @@
 import { AppConfig } from "../types";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 
@@ -8,8 +8,15 @@ interface AudioLevelPayload {
   level: number;
 }
 
+// 转录结果项
+interface TranscriptionResultItem {
+  id: string;
+  label: string;
+  text: string;
+}
+
 // 状态类型
-type OverlayStatus = "recording" | "transcribing";
+type OverlayStatus = "recording" | "transcribing" | "results";
 
 // 静音阈值常量（与后端 NOISE_FLOOR 对齐）
 const SILENCE_THRESHOLD = 0.005;
@@ -206,14 +213,95 @@ function LockedControls({
   );
 }
 
+// 结果列表组件
+function ResultList({
+  items,
+  selectedIndex,
+  onSelect,
+  onConfirm
+}: {
+  items: TranscriptionResultItem[];
+  selectedIndex: number;
+  onSelect: (index: number) => void;
+  onConfirm: (item: TranscriptionResultItem) => void;
+}) {
+  const listRef = useRef<HTMLDivElement>(null);
+
+  return (
+    <div className="result-list" ref={listRef}>
+      <div className="result-list-header">选择处理结果</div>
+      {items.map((item, index) => (
+        <div
+          key={item.id}
+          className={`result-item ${index === selectedIndex ? 'result-item-selected' : ''}`}
+          onClick={() => onConfirm(item)}
+          onMouseEnter={() => onSelect(index)}
+        >
+          <div className="result-item-label">{item.label}</div>
+          <div className="result-item-text">{item.text}</div>
+        </div>
+      ))}
+      <div className="result-list-hint">
+        ↑↓ 选择 · Enter 确认 · Esc 取消
+      </div>
+    </div>
+  );
+}
+
 // 主悬浮窗组件
 export default function OverlayWindow() {
   const [status, setStatus] = useState<OverlayStatus>("recording");
   const [isLocked, setIsLocked] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [theme, setTheme] = useState("light");
+  const [resultItems, setResultItems] = useState<TranscriptionResultItem[]>([]);
+  const [selectedIndex, setSelectedIndex] = useState(0);
 
   const { level: audioLevel, time: animationTime } = useSmoothAudioLevel(status === "recording");
+
+  // 选择结果并插入
+  const confirmResult = useCallback(async (item: TranscriptionResultItem) => {
+    setIsSubmitting(true);
+    try {
+      await invoke("select_transcription_result", { text: item.text });
+      // 重置状态
+      setStatus("recording");
+      setResultItems([]);
+      setSelectedIndex(0);
+    } catch (e) {
+      console.error("选择结果失败:", e);
+    }
+    setIsSubmitting(false);
+  }, []);
+
+  // 键盘导航
+  useEffect(() => {
+    if (status !== "results") return;
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === "ArrowDown") {
+        e.preventDefault();
+        setSelectedIndex(prev => Math.min(prev + 1, resultItems.length - 1));
+      } else if (e.key === "ArrowUp") {
+        e.preventDefault();
+        setSelectedIndex(prev => Math.max(prev - 1, 0));
+      } else if (e.key === "Enter") {
+        e.preventDefault();
+        if (resultItems[selectedIndex]) {
+          confirmResult(resultItems[selectedIndex]);
+        }
+      } else if (e.key === "Escape") {
+        e.preventDefault();
+        // 选择原文并插入
+        if (resultItems[0]) {
+          confirmResult(resultItems[0]);
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => window.removeEventListener("keydown", handleKeyDown);
+  }, [status, resultItems, selectedIndex, confirmResult]);
 
   useEffect(() => {
     invoke<AppConfig>("load_config").then(config => {
@@ -249,6 +337,8 @@ export default function OverlayWindow() {
         setStatus("recording");
         setIsLocked(false);
         setIsSubmitting(false);
+        setResultItems([]);
+        setSelectedIndex(0);
       }))) return;
 
       if (!(await registerListener("recording_locked", () => {
@@ -266,9 +356,13 @@ export default function OverlayWindow() {
       }))) return;
 
       if (!(await registerListener("transcription_complete", () => {
-        setStatus("recording");
-        setIsLocked(false);
-        setIsSubmitting(false);
+        // 如果已经是 results 状态，不要覆盖
+        // 否则重置
+        if (status !== "results") {
+          setStatus("recording");
+          setIsLocked(false);
+          setIsSubmitting(false);
+        }
       }))) return;
 
       if (!(await registerListener("error", () => {
@@ -280,6 +374,15 @@ export default function OverlayWindow() {
       if (!(await registerListener("transcription_cancelled", () => {
         setStatus("recording");
         setIsLocked(false);
+        setIsSubmitting(false);
+      }))) return;
+
+      if (!(await registerListener("transcription_results", (event) => {
+        const items = event.payload as TranscriptionResultItem[];
+        console.log("[OverlayWindow] 收到转录结果列表:", items);
+        setResultItems(items);
+        setSelectedIndex(0);
+        setStatus("results");
         setIsSubmitting(false);
       }))) return;
     };
@@ -295,7 +398,7 @@ export default function OverlayWindow() {
   useEffect(() => {
     if (status === "transcribing") {
       const timeout = setTimeout(async () => {
-        console.warn("转写超时 15 秒，强制调用隐藏悬浮窗");
+        console.warn("转写超时 15 秒，强制隐藏悬浮窗");
         try {
           await invoke("hide_overlay");
           setStatus("recording");
@@ -348,23 +451,34 @@ export default function OverlayWindow() {
 
   return (
     <div className={`overlay-root ${theme === "dark" ? "theme-dark" : "theme-light"}`}>
-      <div className={`overlay-pill ${isLocked ? 'overlay-pill-locked' : ''}`}>
-        {status === "recording" ? (
-          isLocked ? (
-            <LockedControls
-              onFinish={handleFinish}
-              onCancel={handleCancel}
-              level={audioLevel}
-              time={animationTime}
-              disabled={isSubmitting}
-            />
+      {status === "results" ? (
+        <div className={`overlay-pill overlay-pill-results`}>
+          <ResultList
+            items={resultItems}
+            selectedIndex={selectedIndex}
+            onSelect={setSelectedIndex}
+            onConfirm={confirmResult}
+          />
+        </div>
+      ) : (
+        <div className={`overlay-pill ${isLocked ? 'overlay-pill-locked' : ''}`}>
+          {status === "recording" ? (
+            isLocked ? (
+              <LockedControls
+                onFinish={handleFinish}
+                onCancel={handleCancel}
+                level={audioLevel}
+                time={animationTime}
+                disabled={isSubmitting}
+              />
+            ) : (
+              <WaveformBars level={audioLevel} time={animationTime} />
+            )
           ) : (
-            <WaveformBars level={audioLevel} time={animationTime} />
-          )
-        ) : (
-          <LoadingIndicator />
-        )}
-      </div>
+            <LoadingIndicator />
+          )}
+        </div>
+      )}
     </div>
   );
 }

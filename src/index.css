@@ -428,6 +428,117 @@ select,
   border: 1px solid rgba(232, 230, 220, 0.12);
 }
 
+/* ========== 多结果选择列表样式 ========== */
+
+/* 结果模式胶囊 - 更大以容纳列表 */
+.overlay-pill-results {
+  width: 340px;
+  min-height: 48px;
+  max-height: 400px;
+  padding: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  border-radius: 16px;
+}
+
+/* 结果列表容器 */
+.result-list {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  max-height: 380px;
+  overflow-y: auto;
+}
+
+.result-list-header {
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--stone-dark);
+  padding: 10px 14px 4px;
+  letter-spacing: 0.3px;
+  text-transform: uppercase;
+  border-bottom: 1px solid rgba(20, 20, 19, 0.06);
+}
+
+/* 单项结果 */
+.result-item {
+  padding: 8px 14px;
+  cursor: pointer;
+  transition: background 0.12s ease;
+  border-bottom: 1px solid rgba(20, 20, 19, 0.04);
+}
+
+.result-item:last-child {
+  border-bottom: none;
+}
+
+.result-item:hover {
+  background: rgba(20, 20, 19, 0.04);
+}
+
+.result-item-selected {
+  background: rgba(217, 119, 87, 0.12);
+  border-left: 3px solid var(--crail);
+  padding-left: 11px;
+}
+
+.result-item-label {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--crail);
+  margin-bottom: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.2px;
+}
+
+.result-item-text {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  line-height: 1.4;
+  color: var(--ink);
+  word-break: break-word;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.result-list-hint {
+  font-family: var(--font-sans);
+  font-size: 10px;
+  color: var(--stone-dark);
+  padding: 6px 14px 8px;
+  text-align: center;
+  border-top: 1px solid rgba(20, 20, 19, 0.06);
+  opacity: 0.7;
+}
+
+/* 暗色主题结果列表 */
+.theme-dark .result-item:hover {
+  background: rgba(250, 249, 245, 0.06);
+}
+
+.theme-dark .result-item-selected {
+  background: rgba(217, 119, 87, 0.2);
+}
+
+.theme-dark .result-item-text {
+  color: #FAF9F5;
+}
+
+.theme-dark .result-list-header {
+  border-bottom-color: rgba(250, 249, 245, 0.1);
+  color: rgba(250, 249, 245, 0.5);
+}
+
+.theme-dark .result-list-hint {
+  border-top-color: rgba(250, 249, 245, 0.1);
+  color: rgba(250, 249, 245, 0.4);
+}
+
 .theme-dark .locked-btn:not(:disabled):hover {
   background: rgba(250, 249, 245, 0.1);
   border-color: rgba(232, 230, 220, 0.2);

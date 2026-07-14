@@ -36,7 +36,7 @@ use futures_util::FutureExt;
 use hotkey_service::HotkeyService;
 use llm_post_processor::LlmPostProcessor;
 use openai_client::{ChatOptions, Message, OpenAiClient, OpenAiClientConfig};
-use pipeline::{NormalPipeline, TranscriptionContext};
+use pipeline::{NormalPipeline, TranscriptionContext, TranscriptionResultItem};
 use streaming_recorder::StreamingRecorder;
 use text_inserter::TextInserter;
 use usage_stats::UsageStats;
@@ -151,6 +151,8 @@ struct AppState {
     conversation_session: Arc<Mutex<Option<ConversationSession>>>,
     /// AI 助手模式：是否正在处理中（追问期间阻止重复触发）
     is_assistant_processing: Arc<AtomicBool>,
+    /// 多结果选择：插入文本时恢复焦点用到的目标窗口句柄
+    target_window_for_insert: Arc<Mutex<Option<isize>>>,
 }
 
 // ================== 多轮对话数据结构 ==================
@@ -3396,9 +3398,13 @@ async fn handle_transcription_result(
         .map(|(c, _)| c.tnl_config.enabled)
         .unwrap_or(true);
 
+    // 读取 LLM 配置用于多预设处理
+    let llm_config = AppConfig::load()
+        .ok()
+        .map(|(c, _)| c.llm_config);
+
     // 听写模式：只使用 NormalPipeline
     let pipeline = NormalPipeline::new();
-    let mut inserter = { text_inserter.lock().unwrap_or_else(|e| e.into_inner()).take() };
     let pipeline_result = pipeline
         .process(
             &app,
@@ -3406,20 +3412,18 @@ async fn handle_transcription_result(
             enable_post_process,
             dictionary,
             enable_dictionary_enhancement,
-            &mut inserter,
             result,
             asr_time_ms,
             TranscriptionContext::empty(),
             target_hwnd,
             tnl_enabled,
+            llm_config.as_ref(),
         )
         .await;
-    // 归还 text_inserter
-    *text_inserter.lock().unwrap_or_else(|e| e.into_inner()) = inserter;
 
     // 处理管道结果
     match pipeline_result {
-        Ok(result) => {
+        Ok((result, items)) => {
             // 先隐藏录音悬浮窗
             hide_overlay_window(&app).await;
 
@@ -3449,8 +3453,32 @@ async fn handle_transcription_result(
                 tnl_diagnostics: result.tnl_diagnostics,
             };
 
-            // 发送完成事件
+            // 发送完成事件（给主窗口）
             let _ = app.emit("transcription_complete", transcription_result);
+
+            // 发送多结果事件（给悬浮窗，用于用户选择）
+            let _ = app.emit("transcription_results", &items);
+
+            // 如果只有原文（无 LLM 结果），直接插入原文
+            if items.len() == 1 {
+                let mut inserter = { text_inserter.lock().unwrap_or_else(|e| e.into_inner()).take() };
+                if let Some(ref mut ins) = inserter {
+                    let _ = ins.insert_text(&items[0].text);
+                }
+                *text_inserter.lock().unwrap_or_else(|e| e.into_inner()) = inserter;
+            } else {
+                // 多结果：显示悬浮窗供用户选择
+                // 保存 target_hwnd 用于后续文本插入时的焦点恢复
+                let mut hwnd_guard = state.target_window_for_insert.lock().unwrap_or_else(|e| e.into_inner());
+                *hwnd_guard = target_hwnd;
+                // 显示悬浮窗展示结果列表
+                if let Some(overlay) = app.get_webview_window("overlay") {
+                    let _ = overlay.show();
+                }
+            }
+
+            // 发送 transcription_results 事件到悬浮窗
+            // （已在上面 emit）
         }
         Err(e) => {
             // 先隐藏录音悬浮窗
@@ -3845,7 +3873,44 @@ async fn show_overlay(app_handle: AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-/// 隐藏录音悬浮窗（带重试机制）
+/// 选择转录结果并插入文本（多结果模式下用户选择后调用）
+#[tauri::command]
+async fn select_transcription_result(app_handle: AppHandle, text: String) -> Result<String, String> {
+    tracing::info!("用户选择转录结果: {}", text);
+
+    // 获取 text_inserter 并插入文本
+    let state = app_handle.state::<AppState>();
+    let mut inserter = { state.text_inserter.lock().unwrap_or_else(|e| e.into_inner()).take() };
+
+    if let Some(ref mut ins) = inserter {
+        // 先恢复焦点到目标窗口
+        let target_hwnd = *state.target_window_for_insert.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(hwnd) = target_hwnd {
+            if crate::win32_input::is_window_valid(hwnd) {
+                crate::win32_input::restore_focus_with_verify(hwnd, 3);
+            }
+        }
+        // 等待焦点稳定
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+        ins.insert_text(&text).map_err(|e| {
+            tracing::error!("插入选中文本失败: {}", e);
+            e.to_string()
+        })?;
+    } else {
+        tracing::warn!("select_transcription_result: TextInserter 未初始化");
+    }
+    // 归还 inserter
+    *state.text_inserter.lock().unwrap_or_else(|e| e.into_inner()) = inserter;
+
+    // 隐藏悬浮窗
+    if let Some(overlay) = app_handle.get_webview_window("overlay") {
+        let _ = overlay.hide();
+    }
+
+    Ok("ok".to_string())
+}
+
 #[tauri::command]
 async fn hide_overlay(app_handle: AppHandle) -> Result<(), String> {
     if let Some(overlay) = app_handle.get_webview_window("overlay") {
@@ -4818,6 +4883,7 @@ pub fn run() {
                 builtin_dictionary_updater_started: Arc::clone(&builtin_dictionary_updater_started),
                 conversation_session: Arc::new(Mutex::new(None)),
                 is_assistant_processing: Arc::new(AtomicBool::new(false)),
+                target_window_for_insert: Arc::new(Mutex::new(None)),
             };
 
             // 预初始化音频播放器，消除首次按键提示音延迟
@@ -5095,6 +5161,7 @@ pub fn run() {
             copy_full_conversation,
             dismiss_conversation,
             send_text_question,
+            select_transcription_result,
             show_notification_window,
             test_llm_provider,
             test_custom_asr,

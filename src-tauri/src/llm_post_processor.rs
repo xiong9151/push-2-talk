@@ -35,7 +35,7 @@ impl LlmPostProcessor {
     const MAX_ARBITRATION_CANDIDATES: usize = 5;
     const MAX_ARBITRATION_CONTEXT_CHARS: usize = 240;
     /// 词库增强追加指令（当语句润色和词库增强同时开启时追加到用户预设后）
-    const DICTIONARY_ENHANCEMENT_SUFFIX: &'static str = "
+    pub(crate) const DICTIONARY_ENHANCEMENT_SUFFIX: &'static str = "
 
 【词库增强规则】
 请参考 <dictionary> 标签中的词汇进行音似纠错：
@@ -446,6 +446,84 @@ impl LlmPostProcessor {
         }
 
         Ok(&without_fence[start..=end])
+    }
+
+    /// 文本润色（使用指定预设）
+    ///
+    /// 与 polish_transcript 类似，但使用给定的预设（不依赖当前激活的预设）
+    /// 支持预设级别 provider/model 覆盖
+    pub async fn polish_with_preset(
+        &self,
+        raw_text: &str,
+        dictionary: &[String],
+        enable_post_process: bool,
+        enable_dictionary_enhancement: bool,
+        preset: &crate::config::LlmPreset,
+    ) -> Result<String> {
+        if raw_text.trim().is_empty() {
+            return Ok(String::new());
+        }
+
+        let system_prompt = if enable_post_process {
+            let base_prompt = preset.system_prompt.clone();
+            if enable_dictionary_enhancement {
+                tracing::info!(
+                    "LLM 后处理使用预设 ID: {} (名称: {}) + 词库增强",
+                    preset.id,
+                    preset.name
+                );
+                format!("{}{}", base_prompt, Self::DICTIONARY_ENHANCEMENT_SUFFIX)
+            } else {
+                tracing::info!(
+                    "LLM 后处理使用预设 ID: {} (名称: {})",
+                    preset.id,
+                    preset.name
+                );
+                base_prompt
+            }
+        } else {
+            tracing::info!("LLM 后处理: 仅词库增强（未启用语句润色）");
+            Self::DICTIONARY_ONLY_SYSTEM_PROMPT.to_string()
+        };
+
+        let user_message =
+            Self::build_user_message(raw_text, dictionary, enable_dictionary_enhancement);
+
+        // 如果预设指定了 provider 覆盖，使用预设的 provider 配置
+        if let Some(provider_id) = &preset.provider_id {
+            if let Some(provider) = self.config.shared.get_provider(provider_id) {
+                let model = preset
+                    .model
+                    .clone()
+                    .unwrap_or_else(|| provider.default_model.clone());
+                let client_config =
+                    OpenAiClientConfig::new(&provider.endpoint, &provider.api_key, &model)
+                        .with_reasoning_effort(provider.reasoning_effort.clone())
+                        .with_extra_body(provider.extra_body.clone());
+                let client = OpenAiClient::new(client_config);
+                return client
+                    .chat_simple(&system_prompt, &user_message, ChatOptions::for_polishing())
+                    .await;
+            }
+            tracing::warn!(
+                "预设 {} 指向不存在的 provider {}，降级到默认客户端",
+                preset.id,
+                provider_id
+            );
+        }
+
+        // 无 provider 覆盖：使用润色功能默认链解析客户端配置
+        let resolved = self
+            .config
+            .feature_override
+            .resolve_with_feature(&self.config.shared, "polishing");
+        let client_config = OpenAiClientConfig::new(&resolved.endpoint, &resolved.api_key, &resolved.model)
+            .with_reasoning_effort(resolved.reasoning_effort.clone())
+            .with_extra_body(resolved.extra_body.clone());
+        let client = OpenAiClient::new(client_config);
+        client
+            .chat_simple(&system_prompt, &user_message, ChatOptions::for_polishing())
+            .await
     }
 
     /// 文本润色

@@ -1,8 +1,8 @@
 // 普通模式处理管道
 //
-// 处理流程：ASR结果 → 可选LLM润色 → 自动插入文本
+// 处理流程：ASR结果 → 可选LLM润色 → 返回多结果供选择
 //
-// 这是默认的处理模式，保持与原有行为完全兼容
+// Pipeline 不自动插入文本，由调用方决定插入时机
 //
 // 设计原则：Pipeline 不持有锁，所有依赖通过参数传入
 
@@ -10,11 +10,8 @@ use anyhow::Result;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
-use super::types::{PipelineResult, TranscriptionContext, TranscriptionMode};
-use crate::config::AppConfig;
-use crate::learning::coordinator::start_learning_observation;
+use super::types::{PipelineResult, TranscriptionContext, TranscriptionMode, TranscriptionResultItem};
 use crate::llm_post_processor::LlmPostProcessor;
-use crate::text_inserter::TextInserter;
 use crate::tnl::{TnlCandidateDecision, TnlDiagnostics, TnlEngine};
 
 const CANDIDATE_ARBITRATION_TIMEOUT_MS: u64 = 800;
@@ -22,8 +19,8 @@ const CANDIDATE_ARBITRATION_TIMEOUT_MS: u64 = 800;
 /// 普通模式处理管道
 ///
 /// 职责：
-/// 1. 可选的 LLM 后处理（润色、翻译等）
-/// 2. 自动插入文本到当前活动窗口
+/// 1. 可选的 LLM 后处理（润色、翻译等）— 多预设并行
+/// 2. 返回多结果列表供用户选择
 ///
 /// 设计：无状态，所有依赖通过 process() 参数传入
 pub struct NormalPipeline;
@@ -39,14 +36,14 @@ impl NormalPipeline {
     /// # Arguments
     /// * `app` - Tauri 应用句柄（用于发送事件）
     /// * `post_processor` - LLM 后处理器（调用方负责从锁中获取）
-    /// * `text_inserter` - 文本插入器（调用方负责从锁中获取）
     /// * `asr_result` - ASR 转录结果
     /// * `asr_time_ms` - ASR 耗时（毫秒）
     /// * `_context` - 上下文（普通模式不使用）
     /// * `target_hwnd` - 目标窗口句柄（用于焦点恢复）
+    /// * `llm_config` - LLM 配置（用于多预设并行处理）
     ///
     /// # Returns
-    /// * `Ok(PipelineResult)` - 处理成功
+    /// * `Ok((PipelineResult, Vec<TranscriptionResultItem>))` - 处理成功，包含结果列表
     /// * `Err(e)` - 处理失败
     pub async fn process(
         &self,
@@ -55,13 +52,13 @@ impl NormalPipeline {
         enable_post_process: bool,
         dictionary: Vec<String>,
         enable_dictionary_enhancement: bool,
-        text_inserter: &mut Option<TextInserter>,
         asr_result: Result<String>,
         asr_time_ms: u64,
         _context: TranscriptionContext, // 普通模式不使用上下文
         target_hwnd: Option<isize>,     // 目标窗口句柄（用于焦点恢复）
         tnl_enabled: bool,
-    ) -> Result<PipelineResult> {
+        llm_config: Option<&crate::config::LlmConfig>,
+    ) -> Result<(PipelineResult, Vec<TranscriptionResultItem>)> {
         // 1. 解包 ASR 结果
         let asr_text = asr_result?;
         tracing::info!(
@@ -103,47 +100,24 @@ impl NormalPipeline {
         .await;
         let candidate_changed = text != pre_arbitration_text;
 
-        // 4. 可选 LLM 后处理
-        let (final_text, original_text, llm_time_ms) = Self::maybe_polish(
+        // 4. 多结果并行 LLM 处理
+        let (items, final_text, original_text, llm_time_ms) = Self::maybe_polish_multi(
             app,
             post_processor,
             enable_post_process,
             &dictionary,
             enable_dictionary_enhancement,
             &text,
+            llm_config,
         )
         .await;
         let combined_llm_time_ms = Self::sum_llm_time(candidate_llm_time_ms, llm_time_ms);
 
         // 5. 插入前隐藏窗口并主动恢复焦点到目标应用
-        // 使用新的焦点恢复机制，确保文本插入到正确的窗口
         super::focus::hide_overlay_and_restore_focus(app, target_hwnd).await;
 
-        // 6. 插入文本
-        let inserted = Self::insert_text(text_inserter, &final_text);
-
-        // 7. 触发学习观察（如果启用且插入成功）
-        if inserted {
-            if let Some(hwnd) = target_hwnd {
-                if let Ok((config, _)) = AppConfig::load() {
-                    if config.learning_config.enabled {
-                        start_learning_observation(
-                            app.clone(),
-                            final_text.clone(),
-                            hwnd,
-                            config.learning_config,
-                        );
-                    }
-                }
-            }
-        }
-
-        // 8. 返回结果
-        // 历史记录存储 ASR 原文（约束 C14）
-        // 决定是否显示双栏：
-        // - 有 LLM 处理 → 使用 LLM 返回的 original_text
-        // - 无 LLM 处理但 TNL/候选仲裁改变了文本 → 设置原文以便前端显示双栏
-        // - 无 LLM 处理且 TNL 未改变文本 → 不显示双栏（original_text = None）
+        // 6. 返回结果
+        // 历史记录存储 ASR 原文
         let history_original = if original_text.is_some() {
             original_text
         } else if tnl_changed || candidate_changed {
@@ -159,11 +133,11 @@ impl NormalPipeline {
             asr_time_ms,
             combined_llm_time_ms,
             TranscriptionMode::Normal,
-            inserted,
+            false, // pipeline 不再自动插入文本
         );
         result.tnl_diagnostics = tnl_diagnostics;
 
-        Ok(result)
+        Ok((result, items))
     }
 
     async fn maybe_arbitrate_candidates(
@@ -258,33 +232,58 @@ impl NormalPipeline {
         }
     }
 
-    /// 可选的 LLM 后处理
+    /// 多结果 LLM 后处理
     ///
-    /// 如果配置了 LLM 后处理器，则调用它进行润色
-    /// 失败时返回原文
-    async fn maybe_polish(
+    /// 并行运行所有预设，返回多结果列表
+    /// 失败时使用原文
+    async fn maybe_polish_multi(
         app: &AppHandle,
         processor: Option<LlmPostProcessor>,
         enable_post_process: bool,
         dictionary: &[String],
         enable_dictionary_enhancement: bool,
         text: &str,
-    ) -> (String, Option<String>, Option<u64>) {
+        llm_config: Option<&crate::config::LlmConfig>,
+    ) -> (Vec<TranscriptionResultItem>, String, Option<String>, Option<u64>) {
+        // 至少包含原文作为第一项
+        let mut items: Vec<TranscriptionResultItem> = vec![TranscriptionResultItem {
+            id: "original".to_string(),
+            label: "原始文本".to_string(),
+            text: text.to_string(),
+        }];
+
+        // 如果既没有后处理也没有词库增强，直接返回原文
         if !enable_post_process && !enable_dictionary_enhancement {
-            return (text.to_string(), None, None);
+            return (items, text.to_string(), None, None);
         }
 
         // 仅开启词库增强且词库为空：无需调用 LLM
         if !enable_post_process && enable_dictionary_enhancement && dictionary.is_empty() {
-            return (text.to_string(), None, None);
+            return (items, text.to_string(), None, None);
         }
 
-        if let Some(processor) = processor {
-            tracing::info!("NormalPipeline: 开始 LLM 后处理...");
+        let Some(processor_inner) = processor else {
+            return (items, text.to_string(), None, None);
+        };
+
+        // 获取所有预设
+        let presets = llm_config
+            .map(|c| {
+                if c.presets.is_empty() {
+                    vec![]
+                } else {
+                    c.presets.clone()
+                }
+            })
+            .unwrap_or_default();
+
+        // 如果开启了后处理但没有预设，使用默认单次处理
+        if presets.is_empty() {
+            tracing::info!("NormalPipeline: 无预设可用，使用单次处理");
             let _ = app.emit("post_processing", "polishing");
 
             let llm_start = Instant::now();
-            match processor
+            match processor_inner
                 .polish_transcript(
                     text,
                     dictionary,
@@ -300,39 +299,115 @@ impl NormalPipeline {
                         polished,
                         llm_elapsed
                     );
-                    (polished, Some(text.to_string()), Some(llm_elapsed))
+                    items.push(TranscriptionResultItem {
+                        id: "default".to_string(),
+                        label: "处理结果".to_string(),
+                        text: polished.clone(),
+                    });
+                    (items, polished, Some(text.to_string()), Some(llm_elapsed))
                 }
                 Err(e) => {
                     tracing::warn!("NormalPipeline: LLM 后处理失败，使用原文: {}", e);
-                    // 通知前端润色失败（脱敏：只发送通用提示，不暴露底层错误细节）
                     let _ = app.emit("polishing_failed", "润色服务暂时不可用");
-                    // original_text 保持 None，避免被前端误判为"有润色结果"
-                    (text.to_string(), None, None)
+                    (items, text.to_string(), None, None)
                 }
             }
         } else {
-            (text.to_string(), None, None)
-        }
-    }
+            // 并行处理所有预设
+            tracing::info!(
+                "NormalPipeline: 开始多结果并行处理，预设数: {}",
+                presets.len()
+            );
 
-    /// 插入文本到当前活动窗口
-    ///
-    /// 返回是否成功插入
-    fn insert_text(text_inserter: &mut Option<TextInserter>, text: &str) -> bool {
-        if let Some(ref mut inserter) = text_inserter {
-            match inserter.insert_text(text) {
-                Ok(()) => {
-                    tracing::info!("NormalPipeline: 文本插入成功");
-                    true
-                }
-                Err(e) => {
-                    tracing::error!("NormalPipeline: 插入文本失败: {}", e);
-                    false
+            let _ = app.emit("post_processing", "polishing");
+
+            let mut handles = Vec::new();
+            for preset in presets.iter() {
+                let processor_clone = processor_inner.clone();
+                let text_clone = text.to_string();
+                let dict = dictionary.to_vec();
+                let enable_pp = enable_post_process;
+                let enable_dict = enable_dictionary_enhancement;
+                let preset_clone = preset.clone();
+
+                let handle = tokio::spawn(async move {
+                    let start = Instant::now();
+                    let result = processor_clone
+                        .polish_with_preset(
+                            &text_clone,
+                            &dict,
+                            enable_pp,
+                            enable_dict,
+                            &preset_clone,
+                        )
+                        .await;
+                    let elapsed = start.elapsed().as_millis() as u64;
+                    (preset_clone, result, elapsed)
+                });
+                handles.push(handle);
+            }
+
+            // 收集所有结果
+            let mut preset_results: Vec<(String, String, u64)> = Vec::new();
+            let mut first_success: Option<String> = None;
+            let mut total_llm_time: u64 = 0;
+
+            for handle in handles {
+                match handle.await {
+                    Ok((preset, Ok(polished), elapsed)) => {
+                        tracing::info!(
+                            "NormalPipeline: 预设 '{}' 处理完成 (耗时: {}ms)",
+                            preset.name,
+                            elapsed
+                        );
+                        total_llm_time += elapsed;
+                        if first_success.is_none() {
+                            first_success = Some(polished.clone());
+                        }
+                        preset_results.push((preset.name, polished, elapsed));
+                    }
+                    Ok((preset, Err(e), _)) => {
+                        tracing::warn!(
+                            "NormalPipeline: 预设 '{}' 处理失败: {}",
+                            preset.name,
+                            e
+                        );
+                    }
+                    Err(e) => {
+                        tracing::warn!("NormalPipeline: 预设任务 panicked: {}", e);
+                    }
                 }
             }
-        } else {
-            tracing::warn!("NormalPipeline: TextInserter 未初始化");
-            false
+
+            // 构建结果列表
+            for (name, polished, _elapsed) in &preset_results {
+                items.push(TranscriptionResultItem {
+                    id: format!("preset-{}", items.len()),
+                    label: name.clone(),
+                    text: polished.clone(),
+                });
+            }
+
+            // 确定最终文本（首个成功结果或原文）
+            let final_text = first_success.unwrap_or_else(|| text.to_string());
+            let has_llm_results = !preset_results.is_empty();
+            let llm_time_ms = if has_llm_results {
+                Some(total_llm_time)
+            } else {
+                None
+            };
+            let original_text = if has_llm_results {
+                Some(text.to_string())
+            } else {
+                None
+            };
+
+            if !has_llm_results {
+                tracing::warn!("NormalPipeline: 所有预设处理失败，使用原文");
+                let _ = app.emit("polishing_failed", "所有润色服务暂时不可用");
+            }
+
+            (items, final_text, original_text, llm_time_ms)
         }
     }
 }
@@ -340,16 +415,5 @@ impl NormalPipeline {
 impl Default for NormalPipeline {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_pipeline_creation() {
-        let _pipeline = NormalPipeline::new();
-        // Pipeline 现在是无状态的，只需要能创建即可
     }
 }

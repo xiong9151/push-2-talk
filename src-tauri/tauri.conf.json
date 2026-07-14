@@ -58,8 +58,8 @@
         "title": "Recording Overlay",
         "label": "overlay",
         "url": "overlay.html",
-        "width": 200,
-        "height": 80,
+        "width": 380,
+        "height": 240,
         "decorations": false,
         "transparent": true,
         "shadow": false,
@@ -68,7 +68,7 @@
         "resizable": false,
         "visible": false,
         "center": true,
-        "focusable": false
+        "focusable": true
       }
     ],
     "security": {

@@ -65,6 +65,16 @@ pub struct PipelineResult {
     pub tnl_diagnostics: Option<TnlDiagnostics>,
 }
 
+/// 多结果选择中的单项
+///
+/// 包含预设 ID、显示标签和处理后的文本
+#[derive(Debug, Clone, Serialize)]
+pub struct TranscriptionResultItem {
+    pub id: String,
+    pub label: String,
+    pub text: String,
+}
+
 impl PipelineResult {
     /// 创建成功结果
     pub fn success(
