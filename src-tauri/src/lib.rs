@@ -759,6 +759,7 @@ struct ConfigFieldPatch {
     theme: Option<String>,
     enable_mute_other_apps: Option<bool>,
     close_action: Option<Option<String>>,
+    enable_result_selection: Option<bool>,
 }
 
 // Tauri Commands
@@ -873,6 +874,8 @@ async fn save_config(
             theme: theme.unwrap_or_else(|| existing.theme.clone()),
             custom_asr_providers: custom_asr_providers
                 .unwrap_or_else(|| existing.custom_asr_providers.clone()),
+            enable_result_selection: existing.enable_result_selection,
+            selected_result_preset_ids: existing.selected_result_preset_ids.clone(),
         };
 
         Ok(())
@@ -1000,6 +1003,10 @@ async fn patch_config_fields(app: AppHandle, patch: ConfigFieldPatch) -> Result<
                     config.close_action = None;
                 }
             }
+        }
+
+        if let Some(enabled) = patch.enable_result_selection {
+            config.enable_result_selection = enabled;
         }
 
         Ok(())
@@ -3399,9 +3406,10 @@ async fn handle_transcription_result(
         .unwrap_or(true);
 
     // 读取 LLM 配置用于多预设处理
-    let llm_config = AppConfig::load()
+    let (llm_config, enable_result_selection) = AppConfig::load()
         .ok()
-        .map(|(c, _)| c.llm_config);
+        .map(|(c, _)| (c.llm_config, c.enable_result_selection))
+        .unwrap_or_else(|| (crate::config::LlmConfig::default(), false));
 
     // 听写模式：只使用 NormalPipeline
     let pipeline = NormalPipeline::new();
@@ -3418,6 +3426,7 @@ async fn handle_transcription_result(
             target_hwnd,
             tnl_enabled,
             llm_config.as_ref(),
+            enable_result_selection,
         )
         .await;
 

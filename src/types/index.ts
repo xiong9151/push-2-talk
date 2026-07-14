@@ -155,6 +155,8 @@ export interface AppConfig {
   builtin_dictionary_domains: string[];  // 内置词库领域列表
   theme: string;
   custom_asr_providers: CustomAsrProvider[];
+  enable_result_selection: boolean;
+  selected_result_preset_ids: string[];
 }
 
 // 自定义 ASR 提供商配置

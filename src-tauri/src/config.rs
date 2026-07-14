@@ -685,6 +685,12 @@ pub struct AppConfig {
     /// 自定义 ASR 提供商列表
     #[serde(default)]
     pub custom_asr_providers: Vec<CustomAsrProvider>,
+    /// 多结果选择模式：录音结束后在悬浮窗中显示多个预设结果供选择
+    #[serde(default)]
+    pub enable_result_selection: bool,
+    /// 多结果选择模式下，显示的预设 ID 列表（空 = 全部显示）
+    #[serde(default)]
+    pub selected_result_preset_ids: Vec<String>,
 }
 
 fn default_theme() -> String {
@@ -1398,6 +1404,8 @@ impl AppConfig {
             builtin_dictionary_domains: Vec::new(),
             theme: default_theme(),
             custom_asr_providers: Vec::new(),
+            enable_result_selection: false,
+            selected_result_preset_ids: Vec::new(),
         }
     }
 

@@ -16,6 +16,8 @@ export type LlmPageProps = {
   /** R8.2: must be called once consumed so the parent can clear pending state */
   onFocusConsumed?: () => void;
   isRunning: boolean;
+  enableResultSelection: boolean;
+  onToggleResultSelection: (enabled: boolean) => void;
 };
 
 export function LlmPage({
@@ -29,6 +31,8 @@ export function LlmPage({
   pendingFocus,
   onFocusConsumed,
   isRunning,
+  enableResultSelection,
+  onToggleResultSelection,
 }: LlmPageProps) {
   const presetRowRefs = useRef<Record<string, HTMLDivElement | null>>({});
   // 跳转后临时高亮目标 preset row（视觉提示位置，不切 active 也不改配置）
@@ -84,6 +88,30 @@ export function LlmPage({
               >
                 <Plus size={14} /> 新增预设
               </button>
+
+              {/* 多结果选择开关 */}
+              <div className="mt-4 flex items-center justify-between p-3 bg-[var(--panel)] border border-[var(--stone)] rounded-xl">
+                <div className="flex flex-col gap-0.5">
+                  <span className="text-xs font-bold text-stone-600">多结果选择</span>
+                  <span className="text-[10px] text-stone-400 leading-tight">
+                    录音结束后可选多个预设结果
+                  </span>
+                </div>
+                <button
+                  onClick={() => onToggleResultSelection(!enableResultSelection)}
+                  className={[
+                    "relative w-10 h-5 rounded-full transition-colors shrink-0",
+                    enableResultSelection ? "bg-[var(--sage)]" : "bg-stone-300",
+                  ].join(" ")}
+                >
+                  <div
+                    className={[
+                      "absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform",
+                      enableResultSelection ? "translate-x-[22px]" : "translate-x-0.5",
+                    ].join(" ")}
+                  />
+                </button>
+              </div>
             </div>
 
             <div className="flex-1 overflow-y-auto custom-scroll p-2 space-y-1">

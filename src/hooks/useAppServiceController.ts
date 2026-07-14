@@ -172,6 +172,7 @@ export type UseAppServiceControllerParams = {
   /** 即时保存前的回调，用于取消 debounce timer */
   onBeforeImmediateSave?: () => void;
   setCustomAsrProviders?: React.Dispatch<React.SetStateAction<CustomAsrProvider[]>>;
+  setResultSelectionEnabled?: React.Dispatch<React.SetStateAction<boolean>>;
 };
 
 export function useAppServiceController({
@@ -217,6 +218,7 @@ export function useAppServiceController({
   showToast,
   onBeforeImmediateSave,
   setCustomAsrProviders,
+  setResultSelectionEnabled,
 }: UseAppServiceControllerParams) {
   const flashSuccessToast = useCallback(() => {
     setShowSuccessToast(true);
@@ -552,6 +554,11 @@ export function useAppServiceController({
       // 加载自定义 ASR 提供商
       if (setCustomAsrProviders && config.custom_asr_providers) {
         setCustomAsrProviders(config.custom_asr_providers);
+      }
+
+      // 加载多结果选择模式
+      if (setResultSelectionEnabled) {
+        setResultSelectionEnabled(config.enable_result_selection ?? false);
       }
 
       // 返回配置快照供 App.tsx 异步启动服务

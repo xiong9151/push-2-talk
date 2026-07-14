@@ -227,6 +227,15 @@ function ResultList({
 }) {
   const listRef = useRef<HTMLDivElement>(null);
 
+  // Auto-scroll selected item into view
+  useEffect(() => {
+    if (!listRef.current) return;
+    const selectedEl = listRef.current.querySelector('.result-item-selected');
+    if (selectedEl) {
+      selectedEl.scrollIntoView({ block: 'nearest' });
+    }
+  }, [selectedIndex]);
+
   return (
     <div className="result-list" ref={listRef}>
       <div className="result-list-header">选择处理结果</div>
@@ -274,6 +283,17 @@ export default function OverlayWindow() {
     setIsSubmitting(false);
   }, []);
 
+  // Auto-focus window when entering results mode (for keyboard events)
+  useEffect(() => {
+    if (status === "results") {
+      // Small delay to let the overlay render before focusing
+      const timer = setTimeout(() => {
+        window.focus();
+      }, 50);
+      return () => clearTimeout(timer);
+    }
+  }, [status]);
+
   // 键盘导航
   useEffect(() => {
     if (status !== "results") return;
@@ -281,17 +301,21 @@ export default function OverlayWindow() {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === "ArrowDown") {
         e.preventDefault();
+        e.stopPropagation();
         setSelectedIndex(prev => Math.min(prev + 1, resultItems.length - 1));
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
+        e.stopPropagation();
         setSelectedIndex(prev => Math.max(prev - 1, 0));
       } else if (e.key === "Enter") {
         e.preventDefault();
+        e.stopPropagation();
         if (resultItems[selectedIndex]) {
           confirmResult(resultItems[selectedIndex]);
         }
       } else if (e.key === "Escape") {
         e.preventDefault();
+        e.stopPropagation();
         // 选择原文并插入
         if (resultItems[0]) {
           confirmResult(resultItems[0]);
@@ -299,8 +323,8 @@ export default function OverlayWindow() {
       }
     };
 
-    window.addEventListener("keydown", handleKeyDown);
-    return () => window.removeEventListener("keydown", handleKeyDown);
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
   }, [status, resultItems, selectedIndex, confirmResult]);
 
   useEffect(() => {

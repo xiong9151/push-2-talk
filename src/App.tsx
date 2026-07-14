@@ -145,6 +145,17 @@ function App() {
   const [closeAction, setCloseAction] = useState<"close" | "minimize" | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [customAsrProviders, setCustomAsrProviders] = useState<CustomAsrProvider[]>([]);
+  const [resultSelectionEnabled, setResultSelectionEnabled] = useState(false);
+  const handleToggleResultSelection = useCallback(async (enabled: boolean) => {
+    setResultSelectionEnabled(enabled);
+    try {
+      const { invoke } = await import("@tauri-apps/api/core");
+      await invoke("patch_config_fields", { patch: { enable_result_selection: enabled } });
+    } catch (err) {
+      console.error("切换多结果选择失败:", err);
+      setResultSelectionEnabled(!enabled);
+    }
+  }, []);
   const {
     updateStatus,
     updateInfo,
@@ -408,6 +419,7 @@ function App() {
     setShowSuccessToast,
     showToast,
     setCustomAsrProviders,
+    setResultSelectionEnabled,
     onBeforeImmediateSave: cancelAutoSaveDebounce,
   });
   useEffect(() => {
@@ -828,6 +840,8 @@ function App() {
             pendingFocus={pendingPresetFocus}
             onFocusConsumed={() => setPendingPresetFocus(null)}
             isRunning={isConfigLocked}
+            enableResultSelection={resultSelectionEnabled}
+            onToggleResultSelection={handleToggleResultSelection}
           />
         );
       case "assistant":

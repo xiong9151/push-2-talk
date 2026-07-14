@@ -41,6 +41,7 @@ impl NormalPipeline {
     /// * `_context` - 上下文（普通模式不使用）
     /// * `target_hwnd` - 目标窗口句柄（用于焦点恢复）
     /// * `llm_config` - LLM 配置（用于多预设并行处理）
+    /// * `enable_result_selection` - 是否启用多结果选择模式
     ///
     /// # Returns
     /// * `Ok((PipelineResult, Vec<TranscriptionResultItem>))` - 处理成功，包含结果列表
@@ -58,6 +59,7 @@ impl NormalPipeline {
         target_hwnd: Option<isize>,     // 目标窗口句柄（用于焦点恢复）
         tnl_enabled: bool,
         llm_config: Option<&crate::config::LlmConfig>,
+        enable_result_selection: bool,
     ) -> Result<(PipelineResult, Vec<TranscriptionResultItem>)> {
         // 1. 解包 ASR 结果
         let asr_text = asr_result?;
@@ -100,7 +102,7 @@ impl NormalPipeline {
         .await;
         let candidate_changed = text != pre_arbitration_text;
 
-        // 4. 多结果并行 LLM 处理
+        // 6. 多结果并行 LLM 处理
         let (items, final_text, original_text, llm_time_ms) = Self::maybe_polish_multi(
             app,
             post_processor,
@@ -109,6 +111,7 @@ impl NormalPipeline {
             enable_dictionary_enhancement,
             &text,
             llm_config,
+            enable_result_selection,
         )
         .await;
         let combined_llm_time_ms = Self::sum_llm_time(candidate_llm_time_ms, llm_time_ms);
@@ -244,6 +247,7 @@ impl NormalPipeline {
         enable_dictionary_enhancement: bool,
         text: &str,
         llm_config: Option<&crate::config::LlmConfig>,
+        enable_result_selection: bool,
     ) -> (Vec<TranscriptionResultItem>, String, Option<String>, Option<u64>) {
         // 至少包含原文作为第一项
         let mut items: Vec<TranscriptionResultItem> = vec![TranscriptionResultItem {
@@ -312,8 +316,8 @@ impl NormalPipeline {
                     (items, text.to_string(), None, None)
                 }
             }
-        } else {
-            // 并行处理所有预设
+        } else if enable_result_selection && presets.len() > 1 {
+            // 多结果选择模式：并行处理所有预设，返回所有结果供用户选择
             tracing::info!(
                 "NormalPipeline: 开始多结果并行处理，预设数: {}",
                 presets.len()
@@ -408,6 +412,41 @@ impl NormalPipeline {
             }
 
             (items, final_text, original_text, llm_time_ms)
+
+        } else {
+            tracing::info!("NormalPipeline: 使用单次 LLM 后处理（非多结果模式）");
+            let _ = app.emit("post_processing", "polishing");
+
+            let llm_start = Instant::now();
+            match processor_inner
+                .polish_transcript(
+                    text,
+                    dictionary,
+                    enable_post_process,
+                    enable_dictionary_enhancement,
+                )
+                .await
+            {
+                Ok(polished) => {
+                    let llm_elapsed = llm_start.elapsed().as_millis() as u64;
+                    tracing::info!(
+                        "NormalPipeline: LLM 后处理完成: {} (耗时: {}ms)",
+                        polished,
+                        llm_elapsed
+                    );
+                    items.push(TranscriptionResultItem {
+                        id: "default".to_string(),
+                        label: "处理结果".to_string(),
+                        text: polished.clone(),
+                    });
+                    (items, polished, Some(text.to_string()), Some(llm_elapsed))
+                }
+                Err(e) => {
+                    tracing::warn!("NormalPipeline: LLM 后处理失败，使用原文: {}", e);
+                    let _ = app.emit("polishing_failed", "润色服务暂时不可用");
+                    (items, text.to_string(), None, None)
+                }
+            }
         }
     }
 }
