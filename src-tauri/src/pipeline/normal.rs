@@ -454,7 +454,6 @@ impl NormalPipeline {
             }
 
             (items, final_text, original_text, llm_time_ms)
-
         } else {
             tracing::info!("NormalPipeline: 使用单次 LLM 后处理（非多结果模式）");
             let _ = app.emit("post_processing", "polishing");
@@ -497,4 +496,5 @@ impl Default for NormalPipeline {
     fn default() -> Self {
         Self::new()
     }
+}
 }
