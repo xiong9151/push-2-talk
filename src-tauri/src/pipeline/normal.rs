@@ -14,7 +14,6 @@ use super::types::{PipelineResult, TranscriptionContext, TranscriptionMode, Tran
 use crate::config::AppConfig;
 use crate::learning::coordinator::start_learning_observation;
 use crate::llm_post_processor::LlmPostProcessor;
-use crate::text_inserter::TextInserter;
 use crate::tnl::{TnlCandidateDecision, TnlDiagnostics, TnlEngine};
 
 const CANDIDATE_ARBITRATION_TIMEOUT_MS: u64 = 800;

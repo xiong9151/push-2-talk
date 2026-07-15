@@ -761,7 +761,6 @@ struct ConfigFieldPatch {
     close_action: Option<Option<String>>,
     enable_result_selection: Option<bool>,
     enable_live_transcript: Option<bool>,
-    enable_live_transcript: Option<bool>,
 }
 
 // Tauri Commands
