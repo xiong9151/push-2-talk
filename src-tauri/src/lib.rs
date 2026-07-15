@@ -761,6 +761,7 @@ struct ConfigFieldPatch {
     close_action: Option<Option<String>>,
     enable_result_selection: Option<bool>,
     enable_live_transcript: Option<bool>,
+    enable_live_transcript: Option<bool>,
 }
 
 // Tauri Commands
@@ -877,6 +878,7 @@ async fn save_config(
                 .unwrap_or_else(|| existing.custom_asr_providers.clone()),
             enable_result_selection: existing.enable_result_selection,
             selected_result_preset_ids: existing.selected_result_preset_ids.clone(),
+            enable_live_transcript: existing.enable_live_transcript,
         };
 
         Ok(())

@@ -1,8 +1,8 @@
 // 普通模式处理管道
 //
-// 处理流程：ASR结果 → 可选LLM润色 → 返回多结果供选择
+// 处理流程：ASR结果 → 可选LLM润色 → 自动插入文本
 //
-// Pipeline 不自动插入文本，由调用方决定插入时机
+// 这是默认的处理模式，保持与原有行为完全兼容
 //
 // 设计原则：Pipeline 不持有锁，所有依赖通过参数传入
 
@@ -11,7 +11,10 @@ use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
 use super::types::{PipelineResult, TranscriptionContext, TranscriptionMode, TranscriptionResultItem};
+use crate::config::AppConfig;
+use crate::learning::coordinator::start_learning_observation;
 use crate::llm_post_processor::LlmPostProcessor;
+use crate::text_inserter::TextInserter;
 use crate::tnl::{TnlCandidateDecision, TnlDiagnostics, TnlEngine};
 
 const CANDIDATE_ARBITRATION_TIMEOUT_MS: u64 = 800;
@@ -19,8 +22,8 @@ const CANDIDATE_ARBITRATION_TIMEOUT_MS: u64 = 800;
 /// 普通模式处理管道
 ///
 /// 职责：
-/// 1. 可选的 LLM 后处理（润色、翻译等）— 多预设并行
-/// 2. 返回多结果列表供用户选择
+/// 1. 可选的 LLM 后处理（润色、翻译等）
+/// 2. 自动插入文本到当前活动窗口
 ///
 /// 设计：无状态，所有依赖通过 process() 参数传入
 pub struct NormalPipeline;
@@ -32,20 +35,6 @@ impl NormalPipeline {
     }
 
     /// 处理 ASR 结果
-    ///
-    /// # Arguments
-    /// * `app` - Tauri 应用句柄（用于发送事件）
-    /// * `post_processor` - LLM 后处理器（调用方负责从锁中获取）
-    /// * `asr_result` - ASR 转录结果
-    /// * `asr_time_ms` - ASR 耗时（毫秒）
-    /// * `_context` - 上下文（普通模式不使用）
-    /// * `target_hwnd` - 目标窗口句柄（用于焦点恢复）
-    /// * `llm_config` - LLM 配置（用于多预设并行处理）
-    /// * `enable_result_selection` - 是否启用多结果选择模式
-    ///
-    /// # Returns
-    /// * `Ok((PipelineResult, Vec<TranscriptionResultItem>))` - 处理成功，包含结果列表
-    /// * `Err(e)` - 处理失败
     pub async fn process(
         &self,
         app: &AppHandle,
@@ -63,11 +52,6 @@ impl NormalPipeline {
     ) -> Result<(PipelineResult, Vec<TranscriptionResultItem>)> {
         // 1. 解包 ASR 结果
         let asr_text = asr_result?;
-        tracing::info!(
-            "NormalPipeline: 收到 ASR 结果: {} (耗时: {}ms)",
-            asr_text,
-            asr_time_ms
-        );
 
         // 2. TNL 技术规范化（如果启用）
         let (text, tnl_changed, tnl_diagnostics) = {
@@ -89,9 +73,7 @@ impl NormalPipeline {
             }
         };
 
-        // 注意：历史记录存储 ASR 原文（asr_text），LLM 处理使用 TNL 后文本（text）
-
-        // 3. 可选候选仲裁（绑定词库增强开关，不改变全文润色逻辑）
+        // 3. 可选候选仲裁
         let pre_arbitration_text = text.clone();
         let (text, tnl_diagnostics, candidate_llm_time_ms) = Self::maybe_arbitrate_candidates(
             post_processor.clone(),
@@ -102,7 +84,7 @@ impl NormalPipeline {
         .await;
         let candidate_changed = text != pre_arbitration_text;
 
-        // 6. 多结果并行 LLM 处理
+        // 4. 可选 LLM 后处理（可能多预设并行）
         let (items, final_text, original_text, llm_time_ms) = Self::maybe_polish_multi(
             app,
             post_processor,
@@ -119,8 +101,21 @@ impl NormalPipeline {
         // 5. 插入前隐藏窗口并主动恢复焦点到目标应用
         super::focus::hide_overlay_and_restore_focus(app, target_hwnd).await;
 
-        // 6. 返回结果
-        // 历史记录存储 ASR 原文
+        // 6. 触发学习观察（如果插入成功）
+        if let Some(hwnd) = target_hwnd {
+            if let Ok((config, _)) = AppConfig::load() {
+                if config.learning_config.enabled {
+                    start_learning_observation(
+                        app.clone(),
+                        final_text.clone(),
+                        hwnd,
+                        config.learning_config,
+                    );
+                }
+            }
+        }
+
+        // 7. 返回结果
         let history_original = if original_text.is_some() {
             original_text
         } else if tnl_changed || candidate_changed {
@@ -132,11 +127,11 @@ impl NormalPipeline {
         let mut result = PipelineResult::success(
             final_text,
             history_original,
-            None, // 普通模式无引用文本
+            None,
             asr_time_ms,
             combined_llm_time_ms,
             TranscriptionMode::Normal,
-            false, // pipeline 不再自动插入文本
+            false,
         );
         result.tnl_diagnostics = tnl_diagnostics;
 
@@ -175,11 +170,6 @@ impl NormalPipeline {
             return (text, Some(diagnostics), None);
         };
 
-        tracing::info!(
-            "NormalPipeline: 开始 TNL 候选仲裁，候选数: {}",
-            diagnostics.pending_llm_count()
-        );
-
         let fallback_diagnostics = diagnostics.clone();
         let arbitration = tokio::time::timeout(
             Duration::from_millis(CANDIDATE_ARBITRATION_TIMEOUT_MS),
@@ -188,19 +178,8 @@ impl NormalPipeline {
         .await;
 
         match arbitration {
-            Ok(Ok(result)) => {
-                tracing::info!(
-                    "NormalPipeline: TNL 候选仲裁完成 (耗时: {}ms)",
-                    result.elapsed_ms
-                );
-                (
-                    result.text,
-                    Some(result.diagnostics),
-                    Some(result.elapsed_ms),
-                )
-            }
+            Ok(Ok(result)) => (result.text, Some(result.diagnostics), Some(result.elapsed_ms)),
             Ok(Err(e)) => {
-                tracing::warn!("NormalPipeline: TNL 候选仲裁失败，保守跳过: {}", e);
                 let mut diagnostics = fallback_diagnostics;
                 diagnostics.mark_pending_skipped(
                     TnlCandidateDecision::SkippedError,
@@ -210,18 +189,13 @@ impl NormalPipeline {
                 (text, Some(diagnostics), None)
             }
             Err(_) => {
-                tracing::warn!("NormalPipeline: TNL 候选仲裁超时，保守跳过");
                 let mut diagnostics = fallback_diagnostics;
                 diagnostics.mark_pending_skipped(
                     TnlCandidateDecision::SkippedTimeout,
                     "arbitration_timeout",
                     Some(CANDIDATE_ARBITRATION_TIMEOUT_MS),
                 );
-                (
-                    text,
-                    Some(diagnostics),
-                    Some(CANDIDATE_ARBITRATION_TIMEOUT_MS),
-                )
+                (text, Some(diagnostics), Some(CANDIDATE_ARBITRATION_TIMEOUT_MS))
             }
         }
     }
@@ -235,10 +209,7 @@ impl NormalPipeline {
         }
     }
 
-    /// 多结果 LLM 后处理
-    ///
-    /// 并行运行所有预设，返回多结果列表
-    /// 失败时使用原文
+    /// LLM 后处理（支持多预设并行）
     async fn maybe_polish_multi(
         app: &AppHandle,
         processor: Option<LlmPostProcessor>,
@@ -256,12 +227,10 @@ impl NormalPipeline {
             text: text.to_string(),
         }];
 
-        // 如果既没有后处理也没有词库增强，直接返回原文
         if !enable_post_process && !enable_dictionary_enhancement {
             return (items, text.to_string(), None, None);
         }
 
-        // 仅开启词库增强且词库为空：无需调用 LLM
         if !enable_post_process && enable_dictionary_enhancement && dictionary.is_empty() {
             return (items, text.to_string(), None, None);
         }
@@ -272,221 +241,108 @@ impl NormalPipeline {
 
         // 获取所有预设
         let presets = llm_config
-            .map(|c| {
-                if c.presets.is_empty() {
-                    vec![]
-                } else {
-                    c.presets.clone()
-                }
-            })
+            .map(|c| c.presets.clone())
             .unwrap_or_default();
 
-        // 如果开启了后处理但没有预设，使用默认单次处理
-        if presets.is_empty() {
-            tracing::info!("NormalPipeline: 无预设可用，使用单次处理");
-            let _ = app.emit("post_processing", "polishing");
+        // 判断模式并处理
+        let do_multi = enable_result_selection && presets.len() > 1
+            && presets.iter().any(|p| p.selected_for_display);
 
-            let llm_start = Instant::now();
-            match processor_inner
-                .polish_transcript(
-                    text,
-                    dictionary,
-                    enable_post_process,
-                    enable_dictionary_enhancement,
-                )
-                .await
-            {
-                Ok(polished) => {
-                    let llm_elapsed = llm_start.elapsed().as_millis() as u64;
-                    tracing::info!(
-                        "NormalPipeline: LLM 后处理完成: {} (耗时: {}ms)",
-                        polished,
-                        llm_elapsed
-                    );
+        if do_multi {
+            Self::run_multi_presets(app, processor_inner, text, dictionary, enable_post_process, enable_dictionary_enhancement, &presets, &mut items).await
+        } else {
+            Self::run_single_preset(app, processor_inner, text, dictionary, enable_post_process, enable_dictionary_enhancement, &mut items).await
+        }
+    }
+
+    /// 并行运行多个预设
+    async fn run_multi_presets(
+        app: &AppHandle,
+        processor: LlmPostProcessor,
+        text: &str,
+        dictionary: &[String],
+        enable_post_process: bool,
+        enable_dictionary_enhancement: bool,
+        presets: &[crate::config::LlmPreset],
+        items: &mut Vec<TranscriptionResultItem>,
+    ) -> (Vec<TranscriptionResultItem>, String, Option<String>, Option<u64>) {
+        let _ = app.emit("post_processing", "polishing");
+
+        let filtered: Vec<_> = presets.iter().filter(|p| p.selected_for_display).collect();
+        let mut handles = Vec::new();
+
+        for preset in &filtered {
+            let p = processor.clone();
+            let t = text.to_string();
+            let d = dictionary.to_vec();
+            let pc = (*preset).clone();
+            handles.push(tokio::spawn(async move {
+                let start = Instant::now();
+                let result = p.polish_with_preset(&t, &d, enable_post_process, enable_dictionary_enhancement, &pc).await;
+                (pc, result, start.elapsed().as_millis() as u64)
+            }));
+        }
+
+        let mut first_success: Option<String> = None;
+        let mut total_llm_time: u64 = 0;
+
+        for handle in handles {
+            match handle.await {
+                Ok((preset, Ok(polished), elapsed)) => {
+                    total_llm_time += elapsed;
+                    if first_success.is_none() {
+                        first_success = Some(polished.clone());
+                    }
                     items.push(TranscriptionResultItem {
-                        id: "default".to_string(),
-                        label: "处理结果".to_string(),
-                        text: polished.clone(),
+                        id: format!("preset-{}", items.len()),
+                        label: preset.name.clone(),
+                        text: polished,
                     });
-                    (items, polished, Some(text.to_string()), Some(llm_elapsed))
+                }
+                Ok((preset, Err(e), _)) => {
+                    tracing::warn!("预设 '{}' 处理失败: {}", preset.name, e);
                 }
                 Err(e) => {
-                    tracing::warn!("NormalPipeline: LLM 后处理失败，使用原文: {}", e);
-                    let _ = app.emit("polishing_failed", "润色服务暂时不可用");
-                    (items, text.to_string(), None, None)
+                    tracing::warn!("预设任务 panicked: {}", e);
                 }
             }
-        } else if enable_result_selection && presets.len() > 1 {
-            // 多结果选择模式：并行处理所有选中的预设，返回所有结果供用户选择
-            let filtered_presets: Vec<_> = presets
-                .iter()
-                .filter(|p| p.selected_for_display)
-                .cloned()
-                .collect();
+        }
 
-            if filtered_presets.is_empty() {
-                tracing::info!("NormalPipeline: 无预设被选中用于结果显示，使用单次处理");
-                let _ = app.emit("post_processing", "polishing");
+        let final_text = first_success.unwrap_or_else(|| text.to_string());
+        let has_llm = !items.is_empty();
+        if !has_llm {
+            let _ = app.emit("polishing_failed", "所有润色服务暂时不可用");
+        }
+        (items.to_vec(), final_text, has_llm.then(|| text.to_string()), Some(total_llm_time))
+    }
 
-                let llm_start = Instant::now();
-                match processor_inner
-                    .polish_transcript(
-                        text,
-                        dictionary,
-                        enable_post_process,
-                        enable_dictionary_enhancement,
-                    )
-                    .await
-                {
-                    Ok(polished) => {
-                        let llm_elapsed = llm_start.elapsed().as_millis() as u64;
-                        tracing::info!(
-                            "NormalPipeline: LLM 后处理完成: {} (耗时: {}ms)",
-                            polished,
-                            llm_elapsed
-                        );
-                        items.push(TranscriptionResultItem {
-                            id: "default".to_string(),
-                            label: "处理结果".to_string(),
-                            text: polished.clone(),
-                        });
-                        (items, polished, Some(text.to_string()), Some(llm_elapsed))
-                    }
-                    Err(e) => {
-                        tracing::warn!("NormalPipeline: LLM 后处理失败，使用原文: {}", e);
-                        let _ = app.emit("polishing_failed", "润色服务暂时不可用");
-                        (items, text.to_string(), None, None)
-                    }
-                }
-            } else {
-                tracing::info!(
-                    "NormalPipeline: 开始多结果并行处理，预设数: {} (已过滤 {} 个未选中)",
-                    filtered_presets.len(),
-                    presets.len() - filtered_presets.len()
-                );
+    /// 单次 LLM 处理（非多结果或只有1个预设时）
+    async fn run_single_preset(
+        app: &AppHandle,
+        processor: LlmPostProcessor,
+        text: &str,
+        dictionary: &[String],
+        enable_post_process: bool,
+        enable_dictionary_enhancement: bool,
+        items: &mut Vec<TranscriptionResultItem>,
+    ) -> (Vec<TranscriptionResultItem>, String, Option<String>, Option<u64>) {
+        let _ = app.emit("post_processing", "polishing");
+        let llm_start = Instant::now();
 
-                let _ = app.emit("post_processing", "polishing");
-
-                let mut handles = Vec::new();
-                for preset in filtered_presets.iter() {
-                    let processor_clone = processor_inner.clone();
-                    let text_clone = text.to_string();
-                    let dict = dictionary.to_vec();
-                    let enable_pp = enable_post_process;
-                    let enable_dict = enable_dictionary_enhancement;
-                    let preset_clone = preset.clone();
-
-                    let handle = tokio::spawn(async move {
-                        let start = Instant::now();
-                        let result = processor_clone
-                            .polish_with_preset(
-                                &text_clone,
-                                &dict,
-                                enable_pp,
-                                enable_dict,
-                                &preset_clone,
-                            )
-                            .await;
-                        let elapsed = start.elapsed().as_millis() as u64;
-                        (preset_clone, result, elapsed)
-                    });
-                    handles.push(handle);
-                }
-
-            // 收集所有结果
-            let mut preset_results: Vec<(String, String, u64)> = Vec::new();
-            let mut first_success: Option<String> = None;
-            let mut total_llm_time: u64 = 0;
-
-            for handle in handles {
-                match handle.await {
-                    Ok((preset, Ok(polished), elapsed)) => {
-                        tracing::info!(
-                            "NormalPipeline: 预设 '{}' 处理完成 (耗时: {}ms)",
-                            preset.name,
-                            elapsed
-                        );
-                        total_llm_time += elapsed;
-                        if first_success.is_none() {
-                            first_success = Some(polished.clone());
-                        }
-                        preset_results.push((preset.name, polished, elapsed));
-                    }
-                    Ok((preset, Err(e), _)) => {
-                        tracing::warn!(
-                            "NormalPipeline: 预设 '{}' 处理失败: {}",
-                            preset.name,
-                            e
-                        );
-                    }
-                    Err(e) => {
-                        tracing::warn!("NormalPipeline: 预设任务 panicked: {}", e);
-                    }
-                }
-            }
-
-            // 构建结果列表
-            for (name, polished, _elapsed) in &preset_results {
+        match processor.polish_transcript(text, dictionary, enable_post_process, enable_dictionary_enhancement).await {
+            Ok(polished) => {
+                let elapsed = llm_start.elapsed().as_millis() as u64;
                 items.push(TranscriptionResultItem {
-                    id: format!("preset-{}", items.len()),
-                    label: name.clone(),
+                    id: "default".to_string(),
+                    label: "处理结果".to_string(),
                     text: polished.clone(),
                 });
+                (items.to_vec(), polished, Some(text.to_string()), Some(elapsed))
             }
-
-            // 确定最终文本（首个成功结果或原文）
-            let final_text = first_success.unwrap_or_else(|| text.to_string());
-            let has_llm_results = !preset_results.is_empty();
-            let llm_time_ms = if has_llm_results {
-                Some(total_llm_time)
-            } else {
-                None
-            };
-            let original_text = if has_llm_results {
-                Some(text.to_string())
-            } else {
-                None
-            };
-
-            if !has_llm_results {
-                tracing::warn!("NormalPipeline: 所有预设处理失败，使用原文");
-                let _ = app.emit("polishing_failed", "所有润色服务暂时不可用");
-            }
-
-            (items, final_text, original_text, llm_time_ms)
-        } else {
-            tracing::info!("NormalPipeline: 使用单次 LLM 后处理（非多结果模式）");
-            let _ = app.emit("post_processing", "polishing");
-
-            let llm_start = Instant::now();
-            match processor_inner
-                .polish_transcript(
-                    text,
-                    dictionary,
-                    enable_post_process,
-                    enable_dictionary_enhancement,
-                )
-                .await
-            {
-                Ok(polished) => {
-                    let llm_elapsed = llm_start.elapsed().as_millis() as u64;
-                    tracing::info!(
-                        "NormalPipeline: LLM 后处理完成: {} (耗时: {}ms)",
-                        polished,
-                        llm_elapsed
-                    );
-                    items.push(TranscriptionResultItem {
-                        id: "default".to_string(),
-                        label: "处理结果".to_string(),
-                        text: polished.clone(),
-                    });
-                    (items, polished, Some(text.to_string()), Some(llm_elapsed))
-                }
-                Err(e) => {
-                    tracing::warn!("NormalPipeline: LLM 后处理失败，使用原文: {}", e);
-                    let _ = app.emit("polishing_failed", "润色服务暂时不可用");
-                    (items, text.to_string(), None, None)
-                }
+            Err(e) => {
+                tracing::warn!("LLM 后处理失败，使用原文: {}", e);
+                let _ = app.emit("polishing_failed", "润色服务暂时不可用");
+                (items.to_vec(), text.to_string(), None, None)
             }
         }
     }
@@ -497,4 +353,13 @@ impl Default for NormalPipeline {
         Self::new()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_pipeline_creation() {
+        let _pipeline = NormalPipeline::new();
+    }
 }
