@@ -59,6 +59,8 @@ fn build_input_audio_transcription(
 pub struct RealtimeSession {
     sender: mpsc::Sender<SessionCommand>,
     result_receiver: mpsc::Receiver<Result<String>>,
+    /// 实时转录文本发送端（用于向外转发 live_transcript 事件）
+    pub live_transcript_rx: Option<mpsc::Receiver<String>>,
 }
 
 enum SessionCommand {
@@ -137,7 +139,7 @@ impl ConnectionPool {
     }
 
     /// 获取或创建会话
-    pub async fn get_session(&self) -> Result<RealtimeSession> {
+    pub async fn get_session(&self, _app_handle: Option<tauri::AppHandle>) -> Result<RealtimeSession> {
         let mut conn_guard = self.connection.lock().await;
 
         // 检查现有连接是否可用且未超时
@@ -187,6 +189,8 @@ impl ConnectionPool {
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<SessionCommand>(100);
         // 创建结果通道
         let (result_tx, result_rx) = mpsc::channel::<Result<String>>(1);
+        // 创建实时转录通道（用于 live_transcript 事件）
+        let (live_transcript_tx, live_transcript_rx) = mpsc::channel::<String>(100);
 
         // 发送 session.update 配置会话
         let input_audio_transcription =
@@ -289,6 +293,8 @@ impl ConnectionPool {
                                             final_text = transcript.to_string();
                                             has_result = true;
                                             tracing::info!("转录完成: {}", final_text);
+                                            // 转发实时转录
+                                            let _ = live_transcript_tx.try_send(final_text.clone());
                                         }
                                     }
                                     "response.audio_transcript.delta" => {
@@ -296,6 +302,8 @@ impl ConnectionPool {
                                         if let Some(delta) = data["delta"].as_str() {
                                             final_text.push_str(delta);
                                             tracing::debug!("增量转录: {}", delta);
+                                            // 转发实时转录
+                                            let _ = live_transcript_tx.try_send(final_text.clone());
                                         }
                                     }
                                     "response.audio_transcript.done" => {
@@ -305,6 +313,7 @@ impl ConnectionPool {
                                         }
                                         has_result = true;
                                         tracing::info!("转录完成: {}", final_text);
+                                        let _ = live_transcript_tx.try_send(final_text.clone());
                                     }
                                     "response.done" => {
                                         // 响应完成，发送结果
@@ -372,6 +381,7 @@ impl ConnectionPool {
         Ok(RealtimeSession {
             sender: cmd_tx,
             result_receiver: result_rx,
+            live_transcript_rx: Some(live_transcript_rx),
         })
     }
 }
@@ -389,8 +399,8 @@ impl QwenRealtimeClient {
     }
 
     /// 创建新的转录会话
-    pub async fn start_session(&self) -> Result<RealtimeSession> {
-        self.pool.get_session().await
+    pub async fn start_session(&self, app_handle: Option<tauri::AppHandle>) -> Result<RealtimeSession> {
+        self.pool.get_session(app_handle).await
     }
 }
 

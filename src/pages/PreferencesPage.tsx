@@ -1,4 +1,4 @@
-import { Download, Power, RefreshCw, SlidersHorizontal, VolumeX, GraduationCap, Settings2, HelpCircle, Mic, AlertCircle } from "lucide-react";
+import { Download, Power, RefreshCw, SlidersHorizontal, VolumeX, GraduationCap, Settings2, HelpCircle, Mic, AlertCircle, MessageSquareQuote } from "lucide-react";
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AppStatus, UpdateStatus, LearningConfig, SharedLlmConfig, AudioDiagnostics } from "../types";
@@ -15,6 +15,9 @@ export type PreferencesPageProps = {
 
   enableMuteOtherApps: boolean;
   onSetEnableMuteOtherApps: (next: boolean) => Promise<void>;
+
+  enableLiveTranscript: boolean;
+  onSetEnableLiveTranscript: (next: boolean) => Promise<void>;
 
   theme: string;
   setTheme: (theme: string) => Promise<void>;
@@ -38,6 +41,8 @@ export function PreferencesPage({
   onToggleAutostart,
   enableMuteOtherApps,
   onSetEnableMuteOtherApps,
+  enableLiveTranscript,
+  onSetEnableLiveTranscript,
   theme,
   setTheme,
   updateStatus,
@@ -261,6 +266,37 @@ export function PreferencesPage({
               setTheme(newTheme);
             }}
             disabled={status === "recording" || status === "transcribing"}
+          />
+        </div>
+
+        {/* 实时显示转录 */}
+        <div className="flex items-center justify-between p-4 bg-[var(--paper)] border border-[var(--stone)] rounded-2xl">
+          <div className="flex items-center gap-3">
+            <div
+              className={[
+                "p-2 rounded-xl",
+                enableLiveTranscript
+                  ? "bg-[rgba(106,155,204,0.12)] text-[var(--steel)]"
+                  : "bg-white border border-[var(--stone)] text-stone-500",
+              ].join(" ")}
+            >
+              <MessageSquareQuote size={16} />
+            </div>
+            <div>
+              <div className="text-sm font-bold text-[var(--ink)]">实时显示转录</div>
+              <div className="text-[11px] text-stone-400 font-semibold">
+                录音时在悬浮窗中显示实时 ASR 文本
+              </div>
+            </div>
+          </div>
+          <Toggle
+            checked={enableLiveTranscript}
+            onCheckedChange={(next) => {
+              void onSetEnableLiveTranscript(next);
+            }}
+            disabled={status === "recording" || status === "transcribing"}
+            size="sm"
+            variant="blue"
           />
         </div>
 

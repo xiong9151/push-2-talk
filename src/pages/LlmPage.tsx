@@ -89,28 +89,66 @@ export function LlmPage({
                 <Plus size={14} /> 新增预设
               </button>
 
-              {/* 多结果选择开关 */}
-              <div className="mt-4 flex items-center justify-between p-3 bg-[var(--panel)] border border-[var(--stone)] rounded-xl">
-                <div className="flex flex-col gap-0.5">
-                  <span className="text-xs font-bold text-stone-600">多结果选择</span>
-                  <span className="text-[10px] text-stone-400 leading-tight">
-                    录音结束后可选多个预设结果
-                  </span>
-                </div>
-                <button
-                  onClick={() => onToggleResultSelection(!enableResultSelection)}
-                  className={[
-                    "relative w-10 h-5 rounded-full transition-colors shrink-0",
-                    enableResultSelection ? "bg-[var(--sage)]" : "bg-stone-300",
-                  ].join(" ")}
-                >
-                  <div
+              {/* 多结果选择区域 */}
+              <div className="mt-4 space-y-2">
+                {/* 主开关 */}
+                <div className="flex items-center justify-between p-3 bg-[var(--panel)] border border-[var(--stone)] rounded-xl">
+                  <div className="flex flex-col gap-0.5">
+                    <span className="text-xs font-bold text-stone-600">多结果选择</span>
+                    <span className="text-[10px] text-stone-400 leading-tight">
+                      录音结束后可选多个预设结果
+                    </span>
+                  </div>
+                  <button
+                    onClick={() => onToggleResultSelection(!enableResultSelection)}
                     className={[
-                      "absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform",
-                      enableResultSelection ? "translate-x-[22px]" : "translate-x-0.5",
+                      "relative w-10 h-5 rounded-full transition-colors shrink-0",
+                      enableResultSelection ? "bg-[var(--sage)]" : "bg-stone-300",
                     ].join(" ")}
-                  />
-                </button>
+                  >
+                    <div
+                      className={[
+                        "absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform",
+                        enableResultSelection ? "translate-x-[22px]" : "translate-x-0.5",
+                      ].join(" ")}
+                    />
+                  </button>
+                </div>
+
+                {/* 各预设的复选框 */}
+                {enableResultSelection && (
+                  <div className="p-2 space-y-1">
+                    <div className="text-[10px] font-bold text-stone-400 uppercase tracking-wider px-1 mb-1">
+                      在结果中显示
+                    </div>
+                    {llmConfig.presets.map((preset) => (
+                      <label
+                        key={preset.id}
+                        className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-[var(--panel)] cursor-pointer transition-colors"
+                      >
+                        <input
+                          type="checkbox"
+                          checked={preset.selected_for_display ?? true}
+                          disabled={isRunning}
+                          onChange={() => {
+                            setLlmConfig((prev) => ({
+                              ...prev,
+                              presets: prev.presets.map((p) =>
+                                p.id === preset.id
+                                  ? { ...p, selected_for_display: !(p.selected_for_display ?? true) }
+                                  : p,
+                              ),
+                            }));
+                          }}
+                          className="w-3.5 h-3.5 rounded border-stone-300 text-[var(--sage)] focus:ring-[var(--sage)] cursor-pointer"
+                        />
+                        <span className="text-xs font-semibold text-stone-600 truncate">
+                          {preset.name}
+                        </span>
+                      </label>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
 

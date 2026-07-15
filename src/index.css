@@ -434,7 +434,8 @@ select,
 .overlay-pill-results {
   width: 340px;
   min-height: 48px;
-  max-height: 400px;
+  max-height: 80vh;
+  height: auto;
   padding: 0;
   overflow: hidden;
   display: flex;
@@ -574,6 +575,30 @@ select,
 .theme-dark .wave-bar-mini {
   background: #FAF9F5;
   opacity: 0.85;
+}
+
+/* ========== 实时转录文本样式 ========== */
+
+.live-transcript-text {
+  font-family: var(--font-sans);
+  font-size: 11px;
+  line-height: 1.3;
+  color: var(--stone-dark);
+  text-align: center;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  animation: live-transcript-fade 0.3s ease-in;
+}
+
+@keyframes live-transcript-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+.theme-dark .live-transcript-text {
+  color: rgba(250, 249, 245, 0.6);
 }
 
 @layer utilities {

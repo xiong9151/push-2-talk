@@ -64,6 +64,8 @@ export interface LlmPreset {
   provider_id?: string;
   /** Per-preset model override. Invariant: requires `provider_id` to be set. */
   model?: string;
+  /** 是否在多结果悬浮窗中显示 */
+  selected_for_display?: boolean;
 }
 
 // LLM 提供商配置
@@ -157,6 +159,7 @@ export interface AppConfig {
   custom_asr_providers: CustomAsrProvider[];
   enable_result_selection: boolean;
   selected_result_preset_ids: string[];
+  enable_live_transcript: boolean;
 }
 
 // 自定义 ASR 提供商配置

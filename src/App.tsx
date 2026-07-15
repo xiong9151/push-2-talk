@@ -141,6 +141,7 @@ function App() {
   const [rememberChoice, setRememberChoice] = useState(false);
   const [enableAutostart, setEnableAutostart] = useState(false);
   const [enableMuteOtherApps, setEnableMuteOtherApps] = useState(false);
+  const [enableLiveTranscript, setEnableLiveTranscript] = useState(false);
   const [theme, setTheme] = useState("light");
   const [closeAction, setCloseAction] = useState<"close" | "minimize" | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -409,6 +410,7 @@ function App() {
     setEnableAutostart,
     enableMuteOtherApps,
     setEnableMuteOtherApps,
+    setEnableLiveTranscript,
     theme,
     setTheme,
     closeAction,
@@ -461,6 +463,7 @@ function App() {
     theme?: string;
     enableMuteOtherApps?: boolean;
     closeAction?: "close" | "minimize" | null;
+    enableLiveTranscript?: boolean;
   }) => {
     cancelAutoSaveDebounce();
     const syncToken = configSyncWindowControllerRef.current.begin("external_config_updated");
@@ -475,6 +478,7 @@ function App() {
     const previousEnableMuteOtherApps = enableMuteOtherApps;
     const previousLearningConfig = learningConfig;
     const previousCloseAction = closeAction;
+    const previousEnableLiveTranscript = enableLiveTranscript;
 
     if (typeof patch.theme === "string") {
       setTheme(patch.theme);
@@ -488,6 +492,9 @@ function App() {
     }
     if (patch.closeAction !== undefined) {
       setCloseAction(patch.closeAction);
+    }
+    if (typeof patch.enableLiveTranscript === "boolean") {
+      setEnableLiveTranscript(patch.enableLiveTranscript);
     }
 
     setSyncStatus("syncing");
@@ -511,6 +518,9 @@ function App() {
       if (patch.closeAction !== undefined) {
         setCloseAction(previousCloseAction);
       }
+      if (typeof patch.enableLiveTranscript === "boolean") {
+        setEnableLiveTranscript(previousEnableLiveTranscript);
+      }
 
       setSyncStatus("error");
       syncTimeoutRef.current = window.setTimeout(() => {
@@ -525,11 +535,13 @@ function App() {
     enableMuteOtherApps,
     learningConfig,
     closeAction,
+    enableLiveTranscript,
     patchConfigFields,
     setTheme,
     setEnableMuteOtherApps,
     setLearningConfig,
     setCloseAction,
+    setEnableLiveTranscript,
     cancelAutoSaveDebounce,
     releaseConfigSyncWindow,
     updateSyncWindowSnapshot,
@@ -913,6 +925,10 @@ function App() {
             enableMuteOtherApps={enableMuteOtherApps}
             onSetEnableMuteOtherApps={async (next) => {
               await saveFieldPatchWithStatus({ enableMuteOtherApps: next });
+            }}
+            enableLiveTranscript={enableLiveTranscript}
+            onSetEnableLiveTranscript={async (next) => {
+              await saveFieldPatchWithStatus({ enableLiveTranscript: next });
             }}
             updateStatus={updateStatus}
             updateInfo={updateInfo}

@@ -84,6 +84,7 @@ type ConfigFieldPatchPayload = {
   theme?: string;
   enableMuteOtherApps?: boolean;
   closeAction?: "close" | "minimize" | null;
+  enableLiveTranscript?: boolean;
 };
 
 type ResolvedSaveConfig = {
@@ -156,6 +157,8 @@ export type UseAppServiceControllerParams = {
   enableMuteOtherApps: boolean;
   setEnableMuteOtherApps: React.Dispatch<React.SetStateAction<boolean>>;
 
+  setEnableLiveTranscript: React.Dispatch<React.SetStateAction<boolean>>;
+
   theme: string;
   setTheme: React.Dispatch<React.SetStateAction<string>>;
 
@@ -207,6 +210,7 @@ export function useAppServiceController({
   setEnableAutostart,
   enableMuteOtherApps,
   setEnableMuteOtherApps,
+  setEnableLiveTranscript,
   theme,
   setTheme,
   closeAction,
@@ -538,6 +542,7 @@ export function useAppServiceController({
 
       setEnableMuteOtherApps(config.enable_mute_other_apps ?? false);
       setTheme(config.theme || "light");
+      setEnableLiveTranscript(config.enable_live_transcript ?? false);
 
       const dictArr = Array.isArray(config.dictionary) ? config.dictionary : [];
       let loadedDict: DictionaryEntry[];

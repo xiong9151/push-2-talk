@@ -691,6 +691,9 @@ pub struct AppConfig {
     /// 多结果选择模式下，显示的预设 ID 列表（空 = 全部显示）
     #[serde(default)]
     pub selected_result_preset_ids: Vec<String>,
+    /// 实时显示转录文本（在悬浮窗中显示实时 ASR 结果）
+    #[serde(default)]
+    pub enable_live_transcript: bool,
 }
 
 fn default_theme() -> String {
@@ -785,7 +788,12 @@ pub struct LlmPreset {
     /// Migration 9 cleans up violations on load.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub model: Option<String>,
+    /// 是否在多结果悬浮窗中显示
+    #[serde(default = "default_selected_for_display")]
+    pub selected_for_display: bool,
 }
+
+fn default_selected_for_display() -> bool { true }
 
 // ============================================================================
 // 共享 LLM 配置（新增）
@@ -1202,6 +1210,7 @@ fn default_presets() -> Vec<LlmPreset> {
             system_prompt: "你是一个语音转写润色助手。请在不改变原意的前提下：1）删除重复或意义相近的句子；2）合并同一主题的内容；3）去除「嗯」「啊」等口头禅；4）保留数字与关键信息；5）相关数字和时间不要使用中文；6）整理成自然的段落。输出纯文本即可。".to_string(),
             provider_id: None,
             model: None,
+            selected_for_display: true,
         },
         LlmPreset {
             id: "translation".to_string(),
@@ -1209,6 +1218,7 @@ fn default_presets() -> Vec<LlmPreset> {
             system_prompt: "你是一个专业的翻译助手。请将用户的中文语音转写内容翻译成地道、流畅的英文。不要输出任何解释性文字，只输出翻译结果。".to_string(),
             provider_id: None,
             model: None,
+            selected_for_display: true,
         }
     ]
 }
@@ -1406,6 +1416,7 @@ impl AppConfig {
             custom_asr_providers: Vec::new(),
             enable_result_selection: false,
             selected_result_preset_ids: Vec::new(),
+            enable_live_transcript: false,
         }
     }
 

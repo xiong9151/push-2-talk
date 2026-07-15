@@ -317,39 +317,81 @@ impl NormalPipeline {
                 }
             }
         } else if enable_result_selection && presets.len() > 1 {
-            // 多结果选择模式：并行处理所有预设，返回所有结果供用户选择
-            tracing::info!(
-                "NormalPipeline: 开始多结果并行处理，预设数: {}",
-                presets.len()
-            );
+            // 多结果选择模式：并行处理所有选中的预设，返回所有结果供用户选择
+            let filtered_presets: Vec<_> = presets
+                .iter()
+                .filter(|p| p.selected_for_display)
+                .cloned()
+                .collect();
 
-            let _ = app.emit("post_processing", "polishing");
+            if filtered_presets.is_empty() {
+                tracing::info!("NormalPipeline: 无预设被选中用于结果显示，使用单次处理");
+                let _ = app.emit("post_processing", "polishing");
 
-            let mut handles = Vec::new();
-            for preset in presets.iter() {
-                let processor_clone = processor_inner.clone();
-                let text_clone = text.to_string();
-                let dict = dictionary.to_vec();
-                let enable_pp = enable_post_process;
-                let enable_dict = enable_dictionary_enhancement;
-                let preset_clone = preset.clone();
+                let llm_start = Instant::now();
+                match processor_inner
+                    .polish_transcript(
+                        text,
+                        dictionary,
+                        enable_post_process,
+                        enable_dictionary_enhancement,
+                    )
+                    .await
+                {
+                    Ok(polished) => {
+                        let llm_elapsed = llm_start.elapsed().as_millis() as u64;
+                        tracing::info!(
+                            "NormalPipeline: LLM 后处理完成: {} (耗时: {}ms)",
+                            polished,
+                            llm_elapsed
+                        );
+                        items.push(TranscriptionResultItem {
+                            id: "default".to_string(),
+                            label: "处理结果".to_string(),
+                            text: polished.clone(),
+                        });
+                        (items, polished, Some(text.to_string()), Some(llm_elapsed))
+                    }
+                    Err(e) => {
+                        tracing::warn!("NormalPipeline: LLM 后处理失败，使用原文: {}", e);
+                        let _ = app.emit("polishing_failed", "润色服务暂时不可用");
+                        (items, text.to_string(), None, None)
+                    }
+                }
+            } else {
+                tracing::info!(
+                    "NormalPipeline: 开始多结果并行处理，预设数: {} (已过滤 {} 个未选中)",
+                    filtered_presets.len(),
+                    presets.len() - filtered_presets.len()
+                );
 
-                let handle = tokio::spawn(async move {
-                    let start = Instant::now();
-                    let result = processor_clone
-                        .polish_with_preset(
-                            &text_clone,
-                            &dict,
-                            enable_pp,
-                            enable_dict,
-                            &preset_clone,
-                        )
-                        .await;
-                    let elapsed = start.elapsed().as_millis() as u64;
-                    (preset_clone, result, elapsed)
-                });
-                handles.push(handle);
-            }
+                let _ = app.emit("post_processing", "polishing");
+
+                let mut handles = Vec::new();
+                for preset in filtered_presets.iter() {
+                    let processor_clone = processor_inner.clone();
+                    let text_clone = text.to_string();
+                    let dict = dictionary.to_vec();
+                    let enable_pp = enable_post_process;
+                    let enable_dict = enable_dictionary_enhancement;
+                    let preset_clone = preset.clone();
+
+                    let handle = tokio::spawn(async move {
+                        let start = Instant::now();
+                        let result = processor_clone
+                            .polish_with_preset(
+                                &text_clone,
+                                &dict,
+                                enable_pp,
+                                enable_dict,
+                                &preset_clone,
+                            )
+                            .await;
+                        let elapsed = start.elapsed().as_millis() as u64;
+                        (preset_clone, result, elapsed)
+                    });
+                    handles.push(handle);
+                }
 
             // 收集所有结果
             let mut preset_results: Vec<(String, String, u64)> = Vec::new();

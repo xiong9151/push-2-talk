@@ -251,7 +251,7 @@ function ResultList({
         </div>
       ))}
       <div className="result-list-hint">
-        ↑↓ 选择 · Enter 确认 · Esc 取消
+        Tab 选择 · Enter 确认 · Esc 取消
       </div>
     </div>
   );
@@ -265,6 +265,8 @@ export default function OverlayWindow() {
   const [theme, setTheme] = useState("light");
   const [resultItems, setResultItems] = useState<TranscriptionResultItem[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const [liveTranscript, setLiveTranscript] = useState("");
+  const [enableLiveTranscript, setEnableLiveTranscript] = useState(false);
 
   const { level: audioLevel, time: animationTime } = useSmoothAudioLevel(status === "recording");
 
@@ -299,14 +301,14 @@ export default function OverlayWindow() {
     if (status !== "results") return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "ArrowDown") {
+      if (e.key === "Tab") {
         e.preventDefault();
         e.stopPropagation();
-        setSelectedIndex(prev => Math.min(prev + 1, resultItems.length - 1));
-      } else if (e.key === "ArrowUp") {
-        e.preventDefault();
-        e.stopPropagation();
-        setSelectedIndex(prev => Math.max(prev - 1, 0));
+        if (e.shiftKey) {
+          setSelectedIndex(prev => Math.max(prev - 1, 0));
+        } else {
+          setSelectedIndex(prev => Math.min(prev + 1, resultItems.length - 1));
+        }
       } else if (e.key === "Enter") {
         e.preventDefault();
         e.stopPropagation();
@@ -330,6 +332,7 @@ export default function OverlayWindow() {
   useEffect(() => {
     invoke<AppConfig>("load_config").then(config => {
       setTheme(config.theme || "light");
+      setEnableLiveTranscript(config.enable_live_transcript || false);
     }).catch(console.error);
   }, []);
 
@@ -355,6 +358,7 @@ export default function OverlayWindow() {
         const config = event.payload as AppConfig;
         console.log("[OverlayWindow] 收到 config_updated 事件, theme=", config.theme);
         setTheme(config.theme || "light");
+        setEnableLiveTranscript(config.enable_live_transcript || false);
       }))) return;
 
       if (!(await registerListener("recording_started", () => {
@@ -363,6 +367,7 @@ export default function OverlayWindow() {
         setIsSubmitting(false);
         setResultItems([]);
         setSelectedIndex(0);
+        setLiveTranscript("");
       }))) return;
 
       if (!(await registerListener("recording_locked", () => {
@@ -408,6 +413,12 @@ export default function OverlayWindow() {
         setSelectedIndex(0);
         setStatus("results");
         setIsSubmitting(false);
+      }))) return;
+
+      if (!(await registerListener("live_transcript", (event) => {
+        const text = event.payload as string;
+        console.log("[OverlayWindow] 实时转录:", text);
+        setLiveTranscript(text);
       }))) return;
     };
 
@@ -485,19 +496,25 @@ export default function OverlayWindow() {
           />
         </div>
       ) : (
-        <div className={`overlay-pill ${isLocked ? 'overlay-pill-locked' : ''}`}>
+        <div className={`overlay-pill ${isLocked ? 'overlay-pill-locked' : ''}`}
+             style={enableLiveTranscript && status === "recording" ? { paddingTop: '8px', paddingBottom: '8px', height: 'auto', minHeight: '48px' } : {}}>
           {status === "recording" ? (
-            isLocked ? (
-              <LockedControls
-                onFinish={handleFinish}
-                onCancel={handleCancel}
-                level={audioLevel}
-                time={animationTime}
-                disabled={isSubmitting}
-              />
-            ) : (
-              <WaveformBars level={audioLevel} time={animationTime} />
-            )
+            <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '4px', width: '100%' }}>
+              {isLocked ? (
+                <LockedControls
+                  onFinish={handleFinish}
+                  onCancel={handleCancel}
+                  level={audioLevel}
+                  time={animationTime}
+                  disabled={isSubmitting}
+                />
+              ) : (
+                <WaveformBars level={audioLevel} time={animationTime} />
+              )}
+              {enableLiveTranscript && liveTranscript && (
+                <div className="live-transcript-text">{liveTranscript}</div>
+              )}
+            </div>
           ) : (
             <LoadingIndicator />
           )}

@@ -760,6 +760,7 @@ struct ConfigFieldPatch {
     enable_mute_other_apps: Option<bool>,
     close_action: Option<Option<String>>,
     enable_result_selection: Option<bool>,
+    enable_live_transcript: Option<bool>,
 }
 
 // Tauri Commands
@@ -1007,6 +1008,10 @@ async fn patch_config_fields(app: AppHandle, patch: ConfigFieldPatch) -> Result<
 
         if let Some(enabled) = patch.enable_result_selection {
             config.enable_result_selection = enabled;
+        }
+
+        if let Some(enabled) = patch.enable_live_transcript {
+            config.enable_live_transcript = enabled;
         }
 
         Ok(())
@@ -1463,9 +1468,20 @@ async fn handle_qwen_realtime_start(
     }
 
     let realtime_client = QwenRealtimeClient::new(api_key, dictionary, language_mode);
-    match realtime_client.start_session().await {
-        Ok(session) => {
+    match realtime_client.start_session(Some(app.clone())).await {
+        Ok(mut session) => {
             tracing::info!("千问 WebSocket 连接已建立");
+
+            // 提取实时转录接收器并启动转发任务
+            let live_transcript_rx = session.live_transcript_rx.take();
+            if let Some(mut rx) = live_transcript_rx {
+                let app_for_live = app.clone();
+                tokio::spawn(async move {
+                    while let Some(partial) = rx.recv().await {
+                        let _ = app_for_live.emit("live_transcript", &partial);
+                    }
+                });
+            }
 
             let chunk_rx = {
                 let mut streaming_guard = streaming_recorder.lock().unwrap_or_else(|e| e.into_inner());
