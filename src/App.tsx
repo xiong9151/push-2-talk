@@ -98,7 +98,7 @@ function App() {
   const [asrTime, setAsrTime] = useState<number | null>(null);
   const [llmTime, setLlmTime] = useState<number | null>(null);
   const [totalTime, setTotalTime] = useState<number | null>(null);
-  const [activePresetName, setActivePresetName] = useState<string | null>(null);
+  const [activePresetNames, setActivePresetNames] = useState<string[]>([]);
   const [showSuccessToast, setShowSuccessToast] = useState(false);
   const {
     dictionary,
@@ -312,7 +312,7 @@ function App() {
     llmConfigRef,
     enablePostProcessRef,
     enableDictionaryEnhancementRef,
-    setActivePresetName,
+    setActivePresetNames,
     setStatus,
     setError,
     setTranscript,
@@ -795,7 +795,7 @@ function App() {
             asrTime={asrTime}
             llmTime={llmTime}
             totalTime={totalTime}
-            activePresetName={activePresetName}
+            activePresetName={activePresetNames.join(", ") || null}
             transcriptEndRef={transcriptEndRef}
             onCopyText={handleCopyText}
             history={history}

@@ -32,7 +32,7 @@ export type UseTauriEventListenersParams = {
   llmConfigRef: React.RefObject<LlmConfig>;
   enablePostProcessRef?: React.RefObject<boolean>;
   enableDictionaryEnhancementRef?: React.RefObject<boolean>;
-  setActivePresetName?: React.Dispatch<React.SetStateAction<string | null>>;
+  setActivePresetNames?: React.Dispatch<React.SetStateAction<string[]>>;
 
   setStatus: React.Dispatch<React.SetStateAction<AppStatus>>;
   setError: React.Dispatch<React.SetStateAction<string | null>>;
@@ -75,7 +75,7 @@ export function useTauriEventListeners({
   llmConfigRef,
   enablePostProcessRef,
   enableDictionaryEnhancementRef,
-  setActivePresetName,
+  setActivePresetNames,
   setStatus,
   setError,
   setTranscript,
@@ -189,20 +189,29 @@ export function useTauriEventListeners({
           const enablePostProcess = enablePostProcessRef?.current ?? false;
           const enableDictionaryEnhancement = enableDictionaryEnhancementRef?.current ?? false;
 
-          // presetName 逻辑：
+          // presetNames 逻辑：
           // 1. 如果没有 original_text（未启用润色），不显示任何润色标签
           // 2. 如果是 assistant 模式，不显示润色标签
-          // 3. 如果开启了润色，显示预设名称
+          // 3. 如果开启了润色，显示所有勾选的预设名称
           // 4. 如果开启了词库增强，显示"词库增强"
           // 5. 其他情况（仅 TNL 处理），显示"文本规范化"
           const hasPolishing = !!result.original_text;
-          const presetName = hasPolishing && mode !== "assistant"
-            ? enablePostProcess
-              ? llmConfig?.presets.find((p) => p.id === llmConfig.active_preset_id)?.name || null
-              : (enableDictionaryEnhancement ? "词库增强" : "文本规范化")
-            : null;
+          let presetNames: string[] = [];
+          if (hasPolishing && mode !== "assistant") {
+            if (enablePostProcess) {
+              // 收集所有勾选的预设名称
+              const selectedPresets = llmConfig?.presets.filter(
+                (p) => p.selected_for_display ?? true
+              ) ?? [];
+              presetNames = selectedPresets.map((p) => p.name);
+            } else if (enableDictionaryEnhancement) {
+              presetNames = ["词库增强"];
+            } else {
+              presetNames = ["文本规范化"];
+            }
+          }
 
-          setActivePresetName?.(presetName);
+          setActivePresetNames?.(presetNames);
 
           addHistoryRecord({
             id: nanoid(8),
@@ -350,7 +359,7 @@ export function useTauriEventListeners({
   }, [
     llmConfigRef,
     setAsrTime,
-    setActivePresetName,
+    setActivePresetNames,
     setCurrentMode,
     setError,
     setHistory,
