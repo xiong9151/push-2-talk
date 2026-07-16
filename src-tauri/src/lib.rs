@@ -2862,7 +2862,21 @@ async fn transcribe_with_available_clients(
                 }
             }
             Some(config::AsrProvider::Custom) => {
-                Err(anyhow::anyhow!("Custom ASR 不在此路径运行"))
+                // 查找自定义 ASR 提供商
+                let config_load = AppConfig::load().ok();
+                let custom_name = config_load
+                    .as_ref()
+                    .map(|(c, _)| c.asr_config.selection.active_custom_asr_name.clone())
+                    .unwrap_or_default();
+                let provider = config_load
+                    .as_ref()
+                    .and_then(|(c, _)| c.custom_asr_providers.iter().find(|p| p.name == custom_name && p.enabled));
+                if let Some(p) = provider {
+                    tracing::info!("{}使用自定义 ASR: {}", log_prefix, p.name);
+                    transcribe_with_custom_asr(p, audio_data).await
+                } else {
+                    Err(anyhow::anyhow!("未找到自定义 ASR 提供商 '{}'", custom_name))
+                }
             }
             None => {
                 tracing::error!("{}未配置 ASR 提供商", log_prefix);
