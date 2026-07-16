@@ -92,6 +92,9 @@ export const isAsrConfigValid = (config: AsrConfig): boolean => {
     return true;
   } else if (provider === 'siliconflow') {
     return config.credentials.sensevoice_api_key.trim() !== '';
+  } else if (provider === 'custom') {
+    // 自定义 ASR：有选中的提供商名称即视为有效
+    return (config.selection.active_custom_asr_name ?? '').trim() !== '';
   }
 
   return false;
