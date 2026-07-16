@@ -147,6 +147,8 @@ export type UseAppServiceControllerParams = {
   setBuiltinDictionaryDomains: React.Dispatch<React.SetStateAction<string[]>>;
 
   customAsrProviders?: CustomAsrProvider[];
+
+  status: AppStatus;
   setStatus: React.Dispatch<React.SetStateAction<AppStatus>>;
 
   setError: React.Dispatch<React.SetStateAction<string | null>>;

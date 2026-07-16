@@ -422,7 +422,6 @@ function App() {
     setShowCloseDialog,
     setShowSuccessToast,
     showToast,
-    setCustomAsrProviders,
     setResultSelectionEnabled,
     onBeforeImmediateSave: cancelAutoSaveDebounce,
   });
