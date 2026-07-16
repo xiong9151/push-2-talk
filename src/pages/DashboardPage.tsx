@@ -11,7 +11,7 @@ export type DashboardPageProps = {
   asrTime: number | null;
   llmTime: number | null;
   totalTime: number | null;
-  activePresetName: string | null;
+  activePresetNames: string[];
   transcriptEndRef: RefObject<HTMLDivElement>;
   onCopyText: (text: string, e?: MouseEvent) => void;
 
@@ -30,7 +30,7 @@ export function DashboardPage({
   asrTime,
   llmTime,
   totalTime,
-  activePresetName,
+  activePresetNames,
   transcriptEndRef,
   onCopyText,
   history,
@@ -48,7 +48,7 @@ export function DashboardPage({
         asrTime={asrTime}
         llmTime={llmTime}
         totalTime={totalTime}
-        activePresetName={activePresetName}
+        activePresetName={activePresetNames.join(", ") || null}
         transcriptEndRef={transcriptEndRef}
         onCopy={onCopyText}
         variant="compact"

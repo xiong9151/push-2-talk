@@ -795,7 +795,7 @@ function App() {
             asrTime={asrTime}
             llmTime={llmTime}
             totalTime={totalTime}
-            activePresetName={activePresetNames.join(", ") || null}
+            activePresetNames={activePresetNames}
             transcriptEndRef={transcriptEndRef}
             onCopyText={handleCopyText}
             history={history}
