@@ -329,7 +329,7 @@ export function useAppServiceController({
         ),
         builtinDictionaryDomains: finalBuiltinDictionaryDomains,
         theme: finalTheme,
-        customAsrProviders: overrides.customAsrProviders ?? [],
+        customAsrProviders: overrides.customAsrProviders ?? customAsrProviders,
       };
     },
     [
@@ -348,6 +348,7 @@ export function useAppServiceController({
       dictionary,
       builtinDictionaryDomains,
       theme,
+      customAsrProviders,
     ],
   );
 
