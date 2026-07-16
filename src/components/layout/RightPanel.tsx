@@ -3,6 +3,7 @@ import { ArrowRight, Plus, HelpCircle, Sparkles } from "lucide-react";
 import type {
   AsrConfig,
   AsrProvider,
+  CustomAsrProvider,
   DictionaryEntry,
   DualHotkeyConfig,
   HotkeyKey,
@@ -39,6 +40,7 @@ export type RightPanelProps = {
   onAddWord: () => void;
   onNavigate: (page: AppPage) => void;
 
+  customAsrProviders?: CustomAsrProvider[];
   isRunning: boolean;
 };
 
@@ -59,6 +61,7 @@ export function RightPanel({
   setNewWord,
   onAddWord,
   onNavigate,
+  customAsrProviders = [],
   isRunning,
 }: RightPanelProps) {
   const releaseModeKeys =
@@ -71,6 +74,55 @@ export function RightPanel({
   const externalOnlySyncStatus = isExternalSyncing
     ? ("syncing" as const)
     : undefined;
+
+  const enabledCustomProviders = customAsrProviders.filter((p) => p.enabled);
+  const hasCustomProviders = enabledCustomProviders.length > 0;
+
+  // 主模型选项
+  const activeProviderOptions: { value: string; label: string }[] = [
+    { value: "qwen", label: `${ASR_PROVIDERS.qwen.name} · ${ASR_PROVIDERS.qwen.model}` },
+    { value: "doubao", label: `${ASR_PROVIDERS.doubao.name} · ${ASR_PROVIDERS.doubao.model}` },
+    { value: "doubao_ime", label: `${ASR_PROVIDERS.doubao_ime.name} · ${ASR_PROVIDERS.doubao_ime.model}` },
+  ];
+  if (hasCustomProviders) {
+    activeProviderOptions.push({ value: "custom", label: ASR_PROVIDERS.custom.name });
+  }
+
+  // 多结果选择模式：显示多选预设复选框
+  const resultSelectionEnabled = llmConfig.presets.some((p) => p.selected_for_display);
+
+  // 切换预设的 selected_for_display
+  const handleTogglePresetDisplay = (presetId: string) => {
+    setLlmConfig((prev) => ({
+      ...prev,
+      presets: prev.presets.map((p) =>
+        p.id === presetId ? { ...p, selected_for_display: !p.selected_for_display } : p
+      ),
+    }));
+  };
+
+  // 单选预设切换（传统模式）
+  const handleSinglePresetChange = (id: string) => {
+    setLlmConfig((prev) => ({ ...prev, active_preset_id: id }));
+  };
+
+  const handleTogglePresetAndSave = async (presetId: string) => {
+    handleTogglePresetDisplay(presetId);
+    // 保存配置：更新 presets 到后端
+    const updatedPresets = llmConfig.presets.map((p) =>
+      p.id === presetId ? { ...p, selected_for_display: !p.selected_for_display } : p
+    );
+    await saveImmediately({
+      llmConfig: { ...llmConfig, presets: updatedPresets },
+    });
+  };
+
+  const handleSinglePresetAndSave = async (id: string) => {
+    handleSinglePresetChange(id);
+    await saveImmediately({
+      llmConfig: { ...llmConfig, active_preset_id: id },
+    });
+  };
 
   return (
     <aside className="flex shrink-0 w-80 h-full min-h-0 bg-[var(--paper)] border-l border-[var(--stone)] flex-col p-5 gap-5 overflow-y-auto custom-scroll font-sans">
@@ -86,34 +138,26 @@ export function RightPanel({
           onChange={(newProvider) => {
             setAsrConfig((prev) => ({
               ...prev,
-              selection: { ...prev.selection, active_provider: newProvider },
+              selection: { ...prev.selection, active_provider: newProvider as AsrProvider },
             }));
           }}
           onCommit={async (newProvider) => {
             await saveImmediately({
               asrConfig: {
                 ...asrConfig,
-                selection: { ...asrConfig.selection, active_provider: newProvider },
+                selection: { ...asrConfig.selection, active_provider: newProvider as AsrProvider },
               },
             });
           }}
           disabled={isRunning}
           syncStatus={externalOnlySyncStatus}
-          options={[
-            {
-              value: "qwen" as AsrProvider,
-              label: `${ASR_PROVIDERS.qwen.name} · ${ASR_PROVIDERS.qwen.model}`,
-            },
-            {
-              value: "doubao" as AsrProvider,
-              label: `${ASR_PROVIDERS.doubao.name} · ${ASR_PROVIDERS.doubao.model}`,
-            },
-            {
-              value: "doubao_ime" as AsrProvider,
-              label: `${ASR_PROVIDERS.doubao_ime.name} · ${ASR_PROVIDERS.doubao_ime.model}`,
-            },
-          ]}
+          options={activeProviderOptions}
         />
+        {asrConfig.selection.active_provider === "custom" && (
+          <div className="text-[10px] text-stone-500 font-medium pl-1">
+            {asrConfig.selection.active_custom_asr_name || "未选择自定义提供商"}
+          </div>
+        )}
       </div>
 
       {/* 快捷键显示 */}
@@ -165,21 +209,42 @@ export function RightPanel({
               variant="orange"
             />
           </div>
-          <select
-            value={llmConfig.active_preset_id}
-            onChange={(e) => {
-              const id = e.target.value;
-              setLlmConfig((prev) => ({ ...prev, active_preset_id: id }));
-            }}
-            disabled={!enablePostProcess || isRunning}
-            className="w-full text-[10px] font-bold text-stone-500 bg-[var(--paper)] rounded-lg px-2 py-2 outline-none border border-[var(--stone)] disabled:opacity-50"
-          >
-            {llmConfig.presets.map((p) => (
-              <option key={p.id} value={p.id}>
-                {p.name}
-              </option>
-            ))}
-          </select>
+          {enablePostProcess && resultSelectionEnabled ? (
+            /* 多选模式：每个预设带复选框 */
+            <div className="space-y-1">
+              {llmConfig.presets.map((p) => (
+                <label
+                  key={p.id}
+                  className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-[var(--panel)] cursor-pointer transition-colors"
+                >
+                  <input
+                    type="checkbox"
+                    checked={p.selected_for_display ?? false}
+                    disabled={isRunning}
+                    onChange={() => void handleTogglePresetAndSave(p.id)}
+                    className="rounded border-stone-300 text-[var(--steel)] focus:ring-[var(--steel)] disabled:opacity-50"
+                  />
+                  <span className="text-[10px] font-medium text-stone-600">{p.name}</span>
+                </label>
+              ))}
+            </div>
+          ) : (
+            /* 单选模式：传统下拉 */
+            <select
+              value={llmConfig.active_preset_id}
+              onChange={(e) => {
+                void handleSinglePresetAndSave(e.target.value);
+              }}
+              disabled={!enablePostProcess || isRunning}
+              className="w-full text-[10px] font-bold text-stone-500 bg-[var(--paper)] rounded-lg px-2 py-2 outline-none border border-[var(--stone)] disabled:opacity-50"
+            >
+              {llmConfig.presets.map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                </option>
+              ))}
+            </select>
+          )}
           {/* 虚线分割线 */}
           <div className="my-3 border-t border-dashed border-stone-200" />
           <div className="flex items-center justify-between">

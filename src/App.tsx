@@ -1020,6 +1020,7 @@ function App() {
                 setNewWord={setNewWord}
                 onAddWord={handleAddWord}
                 onNavigate={navigate}
+                customAsrProviders={customAsrProviders}
                 isRunning={isConfigLocked}
               />
             )}
