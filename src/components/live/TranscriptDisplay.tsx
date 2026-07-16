@@ -52,13 +52,13 @@ export function TranscriptDisplay({
     }
     // Priority: PostProcess (Polishing) > Dictionary Enhancement
     if (enablePostProcess) {
-      return { Icon: Sparkles, label: `${activePresetName || "智能"}润色` };
+      return { Icon: Sparkles, label: `润色${activePresetName ? ` (${activePresetName})` : ""}` };
     }
     if (enableDictionaryEnhancement) {
       return { Icon: BookOpen, label: "词库增强" };
     }
     // Fallback
-    return { Icon: Sparkles, label: `${activePresetName || "智能"}润色` };
+    return { Icon: Sparkles, label: "文本规范化" };
   };
 
   const { Icon: StatusIcon, label: statusLabel } = getStatusConfig();
