@@ -50,14 +50,13 @@ export function TranscriptDisplay({
     if (currentMode === "assistant") {
       return { Icon: MessageSquare, label: "AI 助手" };
     }
-    // Priority: PostProcess (Polishing) > Dictionary Enhancement
     if (enablePostProcess) {
-      return { Icon: Sparkles, label: `润色${activePresetName ? ` (${activePresetName})` : ""}` };
+      const presetLabel = activePresetName || "智能";
+      return { Icon: Sparkles, label: `润色 (${presetLabel})` };
     }
     if (enableDictionaryEnhancement) {
       return { Icon: BookOpen, label: "词库增强" };
     }
-    // Fallback
     return { Icon: Sparkles, label: "文本规范化" };
   };
 
