@@ -203,6 +203,8 @@ export function useAppServiceController({
   setDictionary,
   builtinDictionaryDomains,
   setBuiltinDictionaryDomains,
+  customAsrProviders,
+  setCustomAsrProviders,
   status,
   setStatus,
   setError,
