@@ -3423,10 +3423,15 @@ async fn handle_transcription_result(
         .unwrap_or(true);
 
     // 读取 LLM 配置用于多预设处理
-    let (llm_config, enable_result_selection) = AppConfig::load()
-        .ok()
-        .map(|(c, _)| (c.llm_config, c.enable_result_selection))
-        .unwrap_or_else(|| (crate::config::LlmConfig::default(), false));
+    let loaded_config = AppConfig::load().ok();
+    let llm_config = loaded_config
+        .as_ref()
+        .map(|(c, _)| c.llm_config.clone())
+        .unwrap_or_default();
+    let enable_result_selection = loaded_config
+        .as_ref()
+        .map(|(c, _)| c.enable_result_selection)
+        .unwrap_or(false);
 
     // 听写模式：只使用 NormalPipeline
     let pipeline = NormalPipeline::new();

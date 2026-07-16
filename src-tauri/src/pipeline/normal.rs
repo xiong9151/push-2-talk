@@ -226,11 +226,11 @@ impl NormalPipeline {
             text: text.to_string(),
         }];
 
-        if !enable_post_process && !enable_dictionary_enhancement {
+        if !enable_result_selection && !enable_post_process && !enable_dictionary_enhancement {
             return (items, text.to_string(), None, None);
         }
 
-        if !enable_post_process && enable_dictionary_enhancement && dictionary.is_empty() {
+        if !enable_post_process && enable_dictionary_enhancement && dictionary.is_empty() && !enable_result_selection {
             return (items, text.to_string(), None, None);
         }
 
@@ -238,13 +238,12 @@ impl NormalPipeline {
             return (items, text.to_string(), None, None);
         };
 
-        // 获取所有预设
         let presets = llm_config
             .map(|c| c.presets.clone())
             .unwrap_or_default();
 
-        // 判断模式并处理
-        let do_multi = enable_result_selection && presets.len() > 1
+        let do_multi = enable_result_selection
+            && !presets.is_empty()
             && presets.iter().any(|p| p.selected_for_display);
 
         if do_multi {
