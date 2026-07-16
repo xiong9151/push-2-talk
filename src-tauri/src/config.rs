@@ -556,6 +556,7 @@ pub enum AsrProvider {
     DoubaoIme,
     #[serde(rename = "siliconflow")]
     SiliconFlow,
+    Custom,
 }
 
 impl Default for AsrProvider {
@@ -591,6 +592,12 @@ pub struct AsrSelection {
     pub enable_fallback: bool,
     #[serde(default)]
     pub fallback_provider: Option<AsrProvider>,
+    /// 当 active_provider=Custom 时，指定自定义 ASR 提供商名称
+    #[serde(default)]
+    pub active_custom_asr_name: String,
+    /// 当 fallback 为 Custom 时，指定自定义 ASR 提供商名称
+    #[serde(default)]
+    pub fallback_custom_asr_name: String,
 }
 
 impl Default for AsrSelection {
@@ -599,6 +606,8 @@ impl Default for AsrSelection {
             active_provider: AsrProvider::DoubaoIme,
             enable_fallback: false,
             fallback_provider: None,
+            active_custom_asr_name: String::new(),
+            fallback_custom_asr_name: String::new(),
         }
     }
 }

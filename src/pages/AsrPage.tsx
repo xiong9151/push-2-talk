@@ -1,6 +1,6 @@
 import type { Dispatch, SetStateAction } from "react";
 import { AlertCircle, Sparkles } from "lucide-react";
-import type { AsrConfig, AsrProvider } from "../types";
+import type { AsrConfig, AsrProvider, CustomAsrProvider } from "../types";
 import { ASR_PROVIDERS } from "../constants";
 import { ApiKeyInput, Toggle, ConfigSelect } from "../components/common";
 import { useConfigSave } from "../contexts/ConfigSaveContext";
@@ -13,6 +13,8 @@ export type AsrPageProps = {
   setShowApiKey: (next: boolean) => void;
 
   isRunning: boolean;
+
+  customAsrProviders?: CustomAsrProvider[];
 };
 
 export function AsrPage({
@@ -21,12 +23,36 @@ export function AsrPage({
   showApiKey,
   setShowApiKey,
   isRunning,
+  customAsrProviders = [],
 }: AsrPageProps) {
   const { saveImmediately, isExternalSyncing } = useConfigSave();
   // 只在外部配置同步时传入状态，用户本地操作让各组件自行管理 internalStatus
   const externalOnlySyncStatus = isExternalSyncing
     ? ("syncing" as const)
     : undefined;
+
+  const enabledCustomProviders = customAsrProviders.filter((p) => p.enabled);
+  const hasCustomProviders = enabledCustomProviders.length > 0;
+
+  // 主模型选项
+  const activeProviderOptions: { value: string; label: string }[] = [
+    { value: "qwen", label: ASR_PROVIDERS.qwen.name },
+    { value: "doubao", label: ASR_PROVIDERS.doubao.name },
+    { value: "doubao_ime", label: ASR_PROVIDERS.doubao_ime.name },
+  ];
+  if (hasCustomProviders) {
+    activeProviderOptions.push({ value: "custom", label: "自定义 ASR" });
+  }
+
+  // 备用模型选项
+  const fallbackProviderOptions: { value: string; label: string }[] = [
+    { value: "siliconflow", label: ASR_PROVIDERS.siliconflow.name },
+  ];
+  if (hasCustomProviders) {
+    enabledCustomProviders.forEach((p) => {
+      fallbackProviderOptions.push({ value: `custom:${p.name}`, label: `${p.name} (自定义)` });
+    });
+  }
 
   return (
     <div className="mx-auto max-w-3xl space-y-6 font-sans">
@@ -50,24 +76,20 @@ export function AsrPage({
                 onChange={(newProvider) => {
                   setAsrConfig((prev) => ({
                     ...prev,
-                    selection: { ...prev.selection, active_provider: newProvider },
+                    selection: { ...prev.selection, active_provider: newProvider as AsrProvider },
                   }));
                 }}
                 onCommit={async (newProvider) => {
                   await saveImmediately({
                     asrConfig: {
                       ...asrConfig,
-                      selection: { ...asrConfig.selection, active_provider: newProvider },
+                      selection: { ...asrConfig.selection, active_provider: newProvider as AsrProvider },
                     },
                   });
                 }}
                 syncStatus={externalOnlySyncStatus}
                 disabled={isRunning}
-                options={[
-                  { value: "qwen" as AsrProvider, label: ASR_PROVIDERS.qwen.name },
-                  { value: "doubao" as AsrProvider, label: ASR_PROVIDERS.doubao.name },
-                  { value: "doubao_ime" as AsrProvider, label: ASR_PROVIDERS.doubao_ime.name },
-                ]}
+                options={activeProviderOptions}
               />
             </div>
 
@@ -123,6 +145,29 @@ export function AsrPage({
                     className="w-full px-3 py-2 bg-white border border-[var(--stone)] rounded-xl text-sm focus:outline-none focus:border-[var(--steel)] transition-colors disabled:opacity-60"
                   />
                 </div>
+              </div>
+            )}
+
+            {asrConfig.selection.active_provider === "custom" && (
+              <div className="space-y-2">
+                <label className="text-xs font-bold text-stone-500">自定义提供商</label>
+                <select
+                  value={asrConfig.selection.active_custom_asr_name || ""}
+                  disabled={isRunning}
+                  onChange={(e) => {
+                    const name = e.target.value;
+                    setAsrConfig((prev) => ({
+                      ...prev,
+                      selection: { ...prev.selection, active_custom_asr_name: name },
+                    }));
+                  }}
+                  className="w-full px-3 py-2 bg-white border border-[var(--stone)] rounded-xl text-sm focus:outline-none focus:border-[var(--steel)] transition-colors disabled:opacity-60"
+                >
+                  <option value="">-- 请选择 --</option>
+                  {enabledCustomProviders.map((p) => (
+                    <option key={p.name} value={p.name}>{p.name}</option>
+                  ))}
+                </select>
               </div>
             )}
 
@@ -198,39 +243,47 @@ export function AsrPage({
               <div className="space-y-2">
                 <label className="text-xs font-bold text-stone-500">服务商</label>
                 <select
-                  value={asrConfig.selection.fallback_provider || "siliconflow"}
-                  disabled={isRunning}
-                  onChange={(e) =>
-                    setAsrConfig((prev) => ({
-                      ...prev,
-                      selection: {
-                        ...prev.selection,
-                        fallback_provider: e.target.value as AsrProvider,
-                      },
-                    }))
+                  value={
+                    asrConfig.selection.fallback_provider === "custom"
+                      ? `custom:${asrConfig.selection.fallback_custom_asr_name || ""}`
+                      : asrConfig.selection.fallback_provider || "siliconflow"
                   }
+                  disabled={isRunning}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (val.startsWith("custom:")) {
+                      const name = val.slice(7);
+                      setAsrConfig((prev) => ({
+                        ...prev,
+                        selection: {
+                          ...prev.selection,
+                          fallback_provider: "custom" as AsrProvider,
+                          fallback_custom_asr_name: name,
+                        },
+                      }));
+                    } else {
+                      setAsrConfig((prev) => ({
+                        ...prev,
+                        selection: {
+                          ...prev.selection,
+                          fallback_provider: val as AsrProvider,
+                          fallback_custom_asr_name: "",
+                        },
+                      }));
+                    }
+                  }}
                   className="w-full px-3 py-2 bg-white border border-[var(--stone)] rounded-xl text-sm focus:outline-none focus:border-[var(--steel)] transition-colors disabled:opacity-60"
                 >
-                  <option value="siliconflow">{ASR_PROVIDERS.siliconflow.name}</option>
+                  {fallbackProviderOptions.map((opt) => (
+                    <option key={opt.value} value={opt.value}>{opt.label}</option>
+                  ))}
                 </select>
               </div>
-              <div className="space-y-2">
-                <label className="text-xs font-bold text-stone-500">API Key</label>
-                <ApiKeyInput
-                  value={asrConfig.credentials.sensevoice_api_key}
-                  onChange={(val) => {
-                    setAsrConfig((prev) => ({
-                      ...prev,
-                      credentials: { ...prev.credentials, sensevoice_api_key: val },
-                    }));
-                  }}
-                  show={showApiKey}
-                  onToggleShow={() => setShowApiKey(!showApiKey)}
-                  placeholder="sk-..."
-                />
-              </div>
               <div className="text-xs text-stone-400 font-semibold">
-                模型：{ASR_PROVIDERS[asrConfig.selection.fallback_provider || "siliconflow"].model}
+                模型：{asrConfig.selection.fallback_provider === "custom"
+                  ? asrConfig.selection.fallback_custom_asr_name || "未选择"
+                  : ASR_PROVIDERS[asrConfig.selection.fallback_provider || "siliconflow"].model
+                }
               </div>
             </div>
           )}

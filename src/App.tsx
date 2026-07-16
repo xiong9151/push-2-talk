@@ -813,6 +813,7 @@ function App() {
             showApiKey={showAsrApiKey}
             setShowApiKey={setShowAsrApiKey}
             isRunning={isConfigLocked}
+            customAsrProviders={customAsrProviders}
           />
         );
       case "models":

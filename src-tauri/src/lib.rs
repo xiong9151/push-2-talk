@@ -471,6 +471,7 @@ fn asr_provider_name(provider: &config::AsrProvider) -> &'static str {
         config::AsrProvider::Doubao => "豆包",
         config::AsrProvider::DoubaoIme => "豆包输入法",
         config::AsrProvider::SiliconFlow => "硅基流动",
+        config::AsrProvider::Custom => "自定义",
     }
 }
 
@@ -499,6 +500,9 @@ fn is_asr_provider_configured(config: &AppConfig, provider: &config::AsrProvider
             .sensevoice_api_key
             .trim()
             .is_empty(),
+        config::AsrProvider::Custom => {
+            config.custom_asr_providers.iter().any(|p| p.enabled)
+        }
     }
 }
 
@@ -521,6 +525,7 @@ fn sync_asr_provider_checks(
     if let Err(e) = doubao_ime_item.set_checked(doubao_ime_checked) {
         tracing::warn!("更新托盘豆包输入法勾选状态失败: {}", e);
     }
+    // Custom 不显示在系统托盘中，无需勾选
 }
 
 async fn restart_service_with_config(
@@ -1867,6 +1872,9 @@ async fn start_app(
             config::AsrProvider::SiliconFlow => {
                 (cfg.credentials.sensevoice_api_key.clone(), None, None)
             }
+            config::AsrProvider::Custom => {
+                (String::new(), None, None)
+            }
         }
     } else {
         (String::new(), None, None)
@@ -2786,6 +2794,23 @@ async fn transcribe_with_available_clients(
                             Err(anyhow::anyhow!("豆包输入法不支持 HTTP 模式，且无可用的 HTTP 提供商"))
                         }
                     }
+                    Some(config::AsrProvider::Custom) => {
+                        // 查找自定义 ASR 提供商
+                        let config_load = AppConfig::load().ok();
+                        let custom_name = config_load
+                            .as_ref()
+                            .map(|(c, _)| c.asr_config.selection.active_custom_asr_name.clone())
+                            .unwrap_or_default();
+                        let provider = config_load
+                            .as_ref()
+                            .and_then(|(c, _)| c.custom_asr_providers.iter().find(|p| p.name == custom_name && p.enabled));
+                        if let Some(p) = provider {
+                            tracing::info!("{}使用自定义 ASR: {}", log_prefix, p.name);
+                            transcribe_with_custom_asr(p, audio_data).await
+                        } else {
+                            Err(anyhow::anyhow!("未找到自定义 ASR 提供商 '{}'", custom_name))
+                        }
+                    }
                     None => {
                         tracing::error!("{}未配置 ASR 提供商", log_prefix);
                         Err(anyhow::anyhow!("ASR 提供商未配置"))
@@ -2835,6 +2860,9 @@ async fn transcribe_with_available_clients(
                 } else {
                     Err(anyhow::anyhow!("豆包输入法不支持 HTTP 模式，且无可用的 HTTP 提供商"))
                 }
+            }
+            Some(config::AsrProvider::Custom) => {
+                Err(anyhow::anyhow!("Custom ASR 不在此路径运行"))
             }
             None => {
                 tracing::error!("{}未配置 ASR 提供商", log_prefix);
@@ -4686,6 +4714,112 @@ async fn test_llm_provider(
         .await
         .map(|s| s.trim().to_string())
         .map_err(|e| format!("测试请求失败: {e}"))
+}
+
+/// 使用自定义 ASR 提供商进行转录
+async fn transcribe_with_custom_asr(
+    config: &config::CustomAsrProvider,
+    audio_data: &[u8],
+) -> anyhow::Result<String> {
+    let audio_base64 = general_purpose::STANDARD.encode(audio_data);
+
+    // 构建请求体（OpenAI chat completion 格式）
+    let mut body = serde_json::json!({
+        "model": config.model_id,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "input_audio",
+                        "input_audio": {
+                            "data": format!("data:audio/wav;base64,{}", audio_base64)
+                        }
+                    }
+                ]
+            }
+        ],
+        "asr_options": {
+            "language": config.language
+        }
+    });
+
+    // 合并自定义配置
+    if !config.custom_config.trim().is_empty() {
+        if let Ok(custom) = serde_json::from_str::<serde_json::Value>(&config.custom_config) {
+            if let Some(obj) = custom.as_object() {
+                for (k, v) in obj {
+                    body[k] = v.clone();
+                }
+            }
+        }
+    }
+
+    // 构建请求
+    let client = asr::utils::create_http_client();
+    let mut req = client.post(&config.endpoint).json(&body);
+
+    // 根据认证方式设置请求头
+    match config.auth_type {
+        config::CustomAsrAuthType::ApiKey => {
+            req = req.header("api-key", &config.api_key);
+        }
+        config::CustomAsrAuthType::Bearer => {
+            req = req.header("Authorization", format!("Bearer {}", config.api_key));
+        }
+        config::CustomAsrAuthType::CustomHeader => {
+            let header_name = if config.auth_header_name.is_empty() {
+                "Authorization".to_string()
+            } else {
+                config.auth_header_name.clone()
+            };
+            req = req.header(&header_name, &config.api_key);
+        }
+    }
+
+    let response = req.send().await.map_err(|e| anyhow::anyhow!("请求失败: {}", e))?;
+    let status = response.status();
+    let text = response.text().await.map_err(|e| anyhow::anyhow!("读取响应失败: {}", e))?;
+
+    if !status.is_success() {
+        anyhow::bail!("API 返回错误 ({}): {}", status.as_u16(), text);
+    }
+
+    // 解析响应
+    let result: serde_json::Value = serde_json::from_str(&text)
+        .map_err(|e| anyhow::anyhow!("解析响应 JSON 失败: {}", e))?;
+
+    // 尝试从 choices[0].message.content 提取（标准 OpenAI 格式）
+    if let Some(content) = result["choices"][0]["message"]["content"].as_str() {
+        if !content.is_empty() {
+            return Ok(content.to_string());
+        }
+    }
+    // 尝试从 choices[0].delta.content 提取（流式格式的最终结果）
+    if let Some(content) = result["choices"][0]["delta"]["content"].as_str() {
+        if !content.is_empty() {
+            return Ok(content.to_string());
+        }
+    }
+    // 尝试从 text 提取
+    if let Some(text_val) = result["text"].as_str() {
+        if !text_val.is_empty() {
+            return Ok(text_val.to_string());
+        }
+    }
+    // 尝试从 result.text 提取
+    if let Some(text_val) = result["result"]["text"].as_str() {
+        if !text_val.is_empty() {
+            return Ok(text_val.to_string());
+        }
+    }
+
+    // 如果都找不到，返回原始 JSON
+    if text.len() < 500 {
+        Ok(text)
+    } else {
+        Ok(serde_json::to_string_pretty(&result).unwrap_or_else(|_| text))
+    }
 }
 
 /// 测试自定义 ASR 提供商

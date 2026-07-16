@@ -127,6 +127,11 @@ export const ASR_PROVIDERS: Record<AsrProvider, AsrProviderMeta> = {
     model: 'SenseVoiceSmall',
     docsUrl: 'https://cloud.siliconflow.cn/',
   },
+  custom: {
+    name: '自定义 ASR',
+    model: '用户配置',
+    docsUrl: '',
+  },
 };
 
 // 默认双热键配置
@@ -143,7 +148,7 @@ export const DEFAULT_DUAL_HOTKEY_CONFIG = {
 export const FALLBACK_ASR_PROVIDER = 'doubao_ime' as AsrProvider;
 
 // 合法的 ASR Provider 列表（用于 localStorage 迁移校验等）
-export const VALID_ASR_PROVIDERS: AsrProvider[] = ['qwen', 'doubao', 'doubao_ime', 'siliconflow'];
+export const VALID_ASR_PROVIDERS: AsrProvider[] = ['qwen', 'doubao', 'doubao_ime', 'siliconflow', 'custom'];
 
 // 默认 ASR 缓存
 export const DEFAULT_ASR_CACHE = {

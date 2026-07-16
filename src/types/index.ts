@@ -29,7 +29,7 @@ export interface DualHotkeyConfig {
 }
 
 // ASR 配置
-export type AsrProvider = 'qwen' | 'doubao' | 'doubao_ime' | 'siliconflow';
+export type AsrProvider = 'qwen' | 'doubao' | 'doubao_ime' | 'siliconflow' | 'custom';
 export type AsrLanguageMode = 'zh' | 'auto';
 
 export interface AsrCredentials {
@@ -47,6 +47,10 @@ export interface AsrSelection {
   active_provider: AsrProvider;
   enable_fallback: boolean;
   fallback_provider: AsrProvider | null;
+  /** 当 active_provider=custom 时，指定自定义 ASR 提供商名称 */
+  active_custom_asr_name?: string;
+  /** 当 fallback 为 custom 时，指定自定义 ASR 提供商名称 */
+  fallback_custom_asr_name?: string;
 }
 
 export interface AsrConfig {
