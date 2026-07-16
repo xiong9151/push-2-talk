@@ -403,6 +403,8 @@ function App() {
     setDictionary,
     builtinDictionaryDomains,
     setBuiltinDictionaryDomains,
+    customAsrProviders,
+    setCustomAsrProviders,
     status,
     setStatus,
     setError,

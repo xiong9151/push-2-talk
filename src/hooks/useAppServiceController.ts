@@ -146,10 +146,7 @@ export type UseAppServiceControllerParams = {
   builtinDictionaryDomains: string[];
   setBuiltinDictionaryDomains: React.Dispatch<React.SetStateAction<string[]>>;
 
-  customAsrProviders: CustomAsrProvider[];
-  setCustomAsrProviders?: React.Dispatch<React.SetStateAction<CustomAsrProvider[]>>;
-
-  status: AppStatus;
+  customAsrProviders?: CustomAsrProvider[];
   setStatus: React.Dispatch<React.SetStateAction<AppStatus>>;
 
   setError: React.Dispatch<React.SetStateAction<string | null>>;
@@ -226,7 +223,6 @@ export function useAppServiceController({
   setShowSuccessToast,
   showToast,
   onBeforeImmediateSave,
-  setCustomAsrProviders,
   setResultSelectionEnabled,
 }: UseAppServiceControllerParams) {
   const flashSuccessToast = useCallback(() => {
