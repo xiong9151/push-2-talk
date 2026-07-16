@@ -791,6 +791,7 @@ async fn save_config(
     builtin_dictionary_domains: Option<Vec<String>>,
     theme: Option<String>,
     custom_asr_providers: Option<Vec<config::CustomAsrProvider>>,
+    enable_result_selection: Option<bool>,
 ) -> Result<String, String> {
     let config = mutate_persisted_config_with_result(|existing| {
         tracing::info!("保存配置...");
@@ -880,7 +881,7 @@ async fn save_config(
             theme: theme.unwrap_or_else(|| existing.theme.clone()),
             custom_asr_providers: custom_asr_providers
                 .unwrap_or_else(|| existing.custom_asr_providers.clone()),
-            enable_result_selection: existing.enable_result_selection,
+            enable_result_selection: enable_result_selection.unwrap_or(existing.enable_result_selection),
             selected_result_preset_ids: existing.selected_result_preset_ids.clone(),
             enable_live_transcript: existing.enable_live_transcript,
         };

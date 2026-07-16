@@ -40,6 +40,7 @@ export type ConfigOverrides = {
   dictionaryEntries?: DictionaryEntry[];
   builtinDictionaryDomains?: string[];
   theme?: string;
+  enableResultSelection?: boolean;
 };
 
 export type ConfigSaveContextValue = {

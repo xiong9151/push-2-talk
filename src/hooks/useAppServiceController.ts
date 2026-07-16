@@ -77,6 +77,7 @@ type SaveConfigGatewayOverrides = {
   builtinDictionaryDomains?: string[];
   theme?: string;
   customAsrProviders?: CustomAsrProvider[];
+  enableResultSelection?: boolean;
 };
 
 type ConfigFieldPatchPayload = {
@@ -106,6 +107,7 @@ type ResolvedSaveConfig = {
   builtinDictionaryDomains: string[];
   theme: string;
   customAsrProviders: CustomAsrProvider[];
+  enableResultSelection: boolean;
 };
 
 export type UseAppServiceControllerParams = {
@@ -333,6 +335,7 @@ export function useAppServiceController({
         builtinDictionaryDomains: finalBuiltinDictionaryDomains,
         theme: finalTheme,
         customAsrProviders: overrides.customAsrProviders ?? customAsrProviders ?? [],
+        enableResultSelection: overrides.enableResultSelection ?? false,
       };
     },
     [
@@ -377,6 +380,7 @@ export function useAppServiceController({
         builtinDictionaryDomains: resolved.builtinDictionaryDomains,
         theme: resolved.theme,
         customAsrProviders: resolved.customAsrProviders,
+        enableResultSelection: resolved.enableResultSelection,
       });
 
       return resolved;
@@ -673,6 +677,7 @@ export function useAppServiceController({
     dictionaryEntries?: DictionaryEntry[];
     builtinDictionaryDomains?: string[];
     theme?: string;
+    enableResultSelection?: boolean;
   }) => {
     // 先取消 debounce timer
     onBeforeImmediateSave?.();
@@ -691,6 +696,7 @@ export function useAppServiceController({
         dictionaryEntries: overrides?.dictionaryEntries,
         builtinDictionaryDomains: overrides?.builtinDictionaryDomains,
         theme: overrides?.theme,
+        enableResultSelection: overrides?.enableResultSelection,
       });
 
       if (overrides?.dictionaryEntries) setDictionary(resolved.dictionaryEntries);

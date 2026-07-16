@@ -116,14 +116,8 @@ export function RightPanel({
     const anyChecked = updatedPresets.some((p) => p.selected_for_display);
     await saveImmediately({
       llmConfig: { ...llmConfig, presets: updatedPresets },
+      enableResultSelection: anyChecked,
     });
-    // 通过 patch_config_fields 同步 enable_result_selection 主开关
-    try {
-      const { invoke } = await import("@tauri-apps/api/core");
-      await invoke("patch_config_fields", { patch: { enable_result_selection: anyChecked } });
-    } catch (err) {
-      console.error("同步多结果选择开关失败:", err);
-    }
   };
 
   const handleSinglePresetAndSave = async (id: string) => {
