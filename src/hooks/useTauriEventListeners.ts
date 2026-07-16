@@ -220,7 +220,7 @@ export function useTauriEventListeners({
             // 只要有 original_text 就设置 polishedText
             polishedText: hasPolishing ? result.text : null,
             selectedText: result.selected_text || null,
-            presetName,
+            presetName: presetNames.join(", ") || null,
             mode,
             asrTimeMs: result.asr_time_ms,
             llmTimeMs: result.llm_time_ms,
