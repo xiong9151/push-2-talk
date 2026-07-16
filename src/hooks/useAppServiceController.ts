@@ -332,7 +332,7 @@ export function useAppServiceController({
         ),
         builtinDictionaryDomains: finalBuiltinDictionaryDomains,
         theme: finalTheme,
-        customAsrProviders: overrides.customAsrProviders ?? customAsrProviders,
+        customAsrProviders: overrides.customAsrProviders ?? customAsrProviders ?? [],
       };
     },
     [
