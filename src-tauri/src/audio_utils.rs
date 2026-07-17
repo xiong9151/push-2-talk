@@ -51,8 +51,8 @@ pub fn calculate_rms(samples: &[f32]) -> f32 {
 /// - FIXME: tanh 后置会限制峰值，即使 gain 正确也可能达不到 TARGET_RMS。
 ///   缺少闭环反馈：未测量输出 RMS 并与目标对比来调整增益。
 ///   改进方向：在 tanh 后测量输出 RMS，通过 PI 控制器迭代调整 gain 值。
-/// - FIXME: 底噪阈值附近缺少迟滞，gai 在 1.0x 与 5.0x 之间可能突发跳变。
-///   当前使用 hysteresis zone 平滑过渡（见下文 NOISE_FLOOR 处理）。
+/// - 底噪阈值附近迟滞：当前使用 hysteresis zone 平滑过渡（见下文 NOISE_FLOOR 处理），
+///   gain 在 1.0x 与 5.0x 之间不再突发跳变。
 pub fn apply_agc(samples: &mut [f32], current_gain: &mut f32) {
     const TARGET_RMS: f32 = 0.10; // 目标 RMS，平衡小声音放大
     const MAX_GAIN: f32 = 5.0; // 最大增益，平衡微弱声音和抗噪能力

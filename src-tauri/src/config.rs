@@ -2003,6 +2003,11 @@ impl AppConfig {
         for provider in &mut s.custom_asr_providers {
             provider.api_key.clear();
         }
+        // 清空遗留 API Key 字段（Provider Registry 模式下可能为空，但保留以防泄漏）
+        s.llm_config.shared.api_key = String::new();
+        s.llm_config.feature_override.api_key = String::new();
+        s.assistant_config.llm.api_key = String::new();
+        s.smart_command_config.api_key.clear();
         s
     }
 

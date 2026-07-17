@@ -330,8 +330,11 @@ impl ConnectionPool {
                                         let _ = live_transcript_tx.try_send(final_text.clone());
                                     }
                                     "response.done" => {
-                                        // 响应完成，发送结果
-                                        has_result = true;
+                                        // 响应完成，发送结果（即使 final_text 为空也正常返回）
+                                        let _ = result_tx
+                                            .send(Ok(final_text.clone()))
+                                            .await;
+                                        return;
                                     }
                                     "error" => {
                                         let error_msg =

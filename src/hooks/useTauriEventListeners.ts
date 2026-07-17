@@ -252,7 +252,7 @@ export function useTauriEventListeners({
             llmTimeMs: null,
             totalTimeMs: 0,
             success: false,
-            errorMessage: errMsg,
+            errorMessage: sanitized,
           });
         }))) return;
 

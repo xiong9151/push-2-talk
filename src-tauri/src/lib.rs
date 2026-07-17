@@ -2490,7 +2490,7 @@ async fn handle_assistant_mode(
             hide_overlay_window(&app).await;
             let _ = recording_start_instant.lock().unwrap_or_else(|e| e.into_inner()).take();
             tracing::error!("AI 助手 ASR 失败: {}", e);
-            let _ = app.emit("error", format!("AI 助手处理失败: {}", e));
+            let _ = app.emit("error", sanitize_error_for_frontend(&format!("AI 助手处理失败: {}", e)));
             return;
         }
     };
@@ -2775,7 +2775,7 @@ async fn handle_assistant_mode(
                 let _ = recording_start_instant.lock().unwrap_or_else(|e| e.into_inner()).take();
                 state.is_assistant_processing.store(false, Ordering::SeqCst);
                 tracing::error!("AI 助手处理失败: {}", e);
-                let _ = app.emit("error", format!("AI 助手处理失败: {}", e));
+                let _ = app.emit("error", sanitize_error_for_frontend(&format!("AI 助手处理失败: {}", e)));
             }
         }
     }
@@ -3595,7 +3595,7 @@ async fn handle_transcription_result(
     let enable_dictionary_enhancement = { *state.enable_dictionary_enhancement.lock().unwrap_or_else(|e| e.into_inner()) };
 
     // 读取 TNL 开关和 LLM 配置（避免 pipeline 内做同步文件 I/O）
-    let config = AppConfig::load().unwrap_or_default();
+    let config = AppConfig::load().unwrap_or((AppConfig::new(), false));
     let tnl_enabled = config.0.tnl_config.enabled;
     let llm_config = config.0.llm_config.clone();
     let enable_result_selection = config.0.enable_result_selection;
@@ -3691,7 +3691,7 @@ async fn handle_transcription_result(
 
             // 发送错误事件
             tracing::error!("转录处理失败: {}", e);
-            let _ = app.emit("error", format!("转录失败: {}", e));
+            let _ = app.emit("error", sanitize_error_for_frontend(&format!("转录失败: {}", e)));
         }
     }
 }
@@ -5329,7 +5329,7 @@ pub fn run() {
                             toggle_post_process_from_tray(app, &post_process_item_for_event)
                         {
                             tracing::error!("托盘切换语句润色失败: {}", e);
-                            let _ = app.emit("error", e);
+                            let _ = app.emit("error", sanitize_error_for_frontend(&format!("托盘切换语句润色失败: {}", e)));
                         }
                     }
                     TRAY_MENU_ID_TOGGLE_DICTIONARY_ENHANCEMENT => {
@@ -5338,7 +5338,7 @@ pub fn run() {
                             &dictionary_enhancement_item_for_event,
                         ) {
                             tracing::error!("托盘切换词库增强失败: {}", e);
-                            let _ = app.emit("error", e);
+                            let _ = app.emit("error", sanitize_error_for_frontend(&format!("托盘切换词库增强失败: {}", e)));
                         }
                     }
                     TRAY_MENU_ID_ASR_QWEN => {
