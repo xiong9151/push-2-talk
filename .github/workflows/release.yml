@@ -158,23 +158,27 @@ jobs:
           workspaces: './src-tauri -> target'
 
       - name: Delete existing release for this tag (if any)
-        shell: bash
+        shell: pwsh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          TAG="${GITHUB_REF#refs/tags/}"
-          echo "Checking for existing release with tag: $TAG"
-          RELEASE_ID=$(curl -s -H "Authorization: token $GITHUB_TOKEN" \
-            "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG" | \
-            jq -r '.id // empty')
-          if [ -n "$RELEASE_ID" ]; then
-            echo "Found existing release ID: $RELEASE_ID, deleting..."
-            curl -s -X DELETE -H "Authorization: token $GITHUB_TOKEN" \
-              "https://api.github.com/repos/${{ github.repository }}/releases/$RELEASE_ID"
-            echo "Deleted old release."
-          else
-            echo "No existing release found for this tag."
-          fi
+          $TAG = "$env:GITHUB_REF" -replace '^refs/tags/', ''
+          Write-Host "Checking for existing release with tag: $TAG"
+          try {
+            $response = curl.exe -s -H "Authorization: token $env:GITHUB_TOKEN" `
+              "https://api.github.com/repos/${{ github.repository }}/releases/tags/$TAG"
+            $release = $response | ConvertFrom-Json
+            if ($release.id) {
+              Write-Host "Found existing release ID: $($release.id), deleting..."
+              curl.exe -s -X DELETE -H "Authorization: token $env:GITHUB_TOKEN" `
+                "https://api.github.com/repos/${{ github.repository }}/releases/$($release.id)"
+              Write-Host "Deleted old release."
+            } else {
+              Write-Host "No existing release found for this tag."
+            }
+          } catch {
+            Write-Host "No existing release found (or error: $($_.Exception.Message))."
+          }
 
       - name: Install frontend dependencies
         run: npm ci
