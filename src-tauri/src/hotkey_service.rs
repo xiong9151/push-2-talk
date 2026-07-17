@@ -146,7 +146,7 @@ const KEY_RELEASE_STABLE_MS: u64 = 500;
 #[cfg(not(target_os = "windows"))]
 const WATCHDOG_INTERVAL_MS: u64 = 50;
 
-/// 严格匹配：要求目标按键全部按下，且没有额外的修饰键被按下
+/// 严格匹配：要求目标按键全部按下，且没有额外的修饰键或非修饰键被按下
 #[cfg(target_os = "windows")]
 fn is_hotkey_pressed_strict(target_keys: &[HotkeyKey]) -> bool {
     if target_keys.is_empty() {
@@ -157,7 +157,7 @@ fn is_hotkey_pressed_strict(target_keys: &[HotkeyKey]) -> bool {
         return false;
     }
 
-    // 检查是否有“额外修饰键”被按下（用于模拟 rdev 的严格匹配 len==keys.len() 行为）
+    // 检查是否有”额外修饰键”被按下（用于模拟 rdev 的严格匹配 len==keys.len() 行为）
     const MODIFIERS: [HotkeyKey; 8] = [
         HotkeyKey::ControlLeft,
         HotkeyKey::ControlRight,
@@ -171,6 +171,36 @@ fn is_hotkey_pressed_strict(target_keys: &[HotkeyKey]) -> bool {
 
     for modifier in MODIFIERS.iter() {
         if is_key_physically_down(modifier) && !target_keys.contains(modifier) {
+            return false;
+        }
+    }
+
+    // 额外检查”额外非修饰键”是否被按下
+    // 修复：如果用户设置了 Ctrl+Win 但按下了 Ctrl+Win+F，F 键不会被上面的修饰键检查拒绝
+    // 此检查覆盖所有 is_key_physically_down 支持的非修饰键
+    const NON_MODIFIERS: &[HotkeyKey] = &[
+        HotkeyKey::KeyA, HotkeyKey::KeyB, HotkeyKey::KeyC, HotkeyKey::KeyD,
+        HotkeyKey::KeyE, HotkeyKey::KeyF, HotkeyKey::KeyG, HotkeyKey::KeyH,
+        HotkeyKey::KeyI, HotkeyKey::KeyJ, HotkeyKey::KeyK, HotkeyKey::KeyL,
+        HotkeyKey::KeyM, HotkeyKey::KeyN, HotkeyKey::KeyO, HotkeyKey::KeyP,
+        HotkeyKey::KeyQ, HotkeyKey::KeyR, HotkeyKey::KeyS, HotkeyKey::KeyT,
+        HotkeyKey::KeyU, HotkeyKey::KeyV, HotkeyKey::KeyW, HotkeyKey::KeyX,
+        HotkeyKey::KeyY, HotkeyKey::KeyZ,
+        HotkeyKey::Num0, HotkeyKey::Num1, HotkeyKey::Num2, HotkeyKey::Num3,
+        HotkeyKey::Num4, HotkeyKey::Num5, HotkeyKey::Num6, HotkeyKey::Num7,
+        HotkeyKey::Num8, HotkeyKey::Num9,
+        HotkeyKey::F1, HotkeyKey::F2, HotkeyKey::F3, HotkeyKey::F4,
+        HotkeyKey::F5, HotkeyKey::F6, HotkeyKey::F7, HotkeyKey::F8,
+        HotkeyKey::F9, HotkeyKey::F10, HotkeyKey::F11, HotkeyKey::F12,
+        HotkeyKey::Space, HotkeyKey::Tab, HotkeyKey::Escape,
+        HotkeyKey::Return, HotkeyKey::Backspace, HotkeyKey::Delete, HotkeyKey::Insert,
+        HotkeyKey::Up, HotkeyKey::Down, HotkeyKey::Left, HotkeyKey::Right,
+        HotkeyKey::Home, HotkeyKey::End, HotkeyKey::PageUp, HotkeyKey::PageDown,
+        HotkeyKey::CapsLock,
+    ];
+
+    for key in NON_MODIFIERS.iter() {
+        if !target_keys.contains(key) && is_key_physically_down(key) {
             return false;
         }
     }
@@ -837,14 +867,25 @@ impl HotkeyService {
                                 };
 
                                 if !all_pressed {
+                                    // 检查当前触发模式：Toggle 模式下松开快捷键不应停止录音
+                                    let trigger_mode =
+                                        s.current_trigger_mode.unwrap_or(TriggerMode::Dictation);
+                                    let cfg = match trigger_mode {
+                                        TriggerMode::Dictation => &dictation_cfg,
+                                        TriggerMode::AiAssistant => &assistant_cfg,
+                                    };
+                                    if matches!(cfg.mode, crate::config::HotkeyMode::Toggle) {
+                                        tracing::info!("切换模式快捷键释放，录音继续（等待再次按下停止）");
+                                        return;
+                                    }
+
                                     // === 松手模式：检查是否为松手模式快捷键触发 ===
                                     if s.is_release_mode_triggered {
                                         tracing::info!("松手模式快捷键释放，录音继续（锁定状态）");
                                         return; // 不停止录音，等待用户点击悬浮窗按钮
                                     }
 
-                                    let mode =
-                                        s.current_trigger_mode.unwrap_or(TriggerMode::Dictation);
+                                    let mode = trigger_mode;
                                     s.is_recording = false;
                                     s.watchdog_running = false;
                                     s.current_trigger_mode = None;

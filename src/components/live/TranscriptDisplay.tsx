@@ -9,7 +9,7 @@ export type TranscriptDisplayProps = {
   asrTime: number | null;
   llmTime: number | null;
   totalTime: number | null;
-  activePresetName: string | null;
+  activePresetNames: string[];
   transcriptEndRef: RefObject<HTMLDivElement>;
   onCopy: (text: string, e?: MouseEvent) => void;
   variant?: "default" | "compact";
@@ -25,7 +25,7 @@ export function TranscriptDisplay({
   asrTime,
   llmTime,
   totalTime,
-  activePresetName,
+  activePresetNames,
   transcriptEndRef,
   onCopy,
   variant = "default",
@@ -50,14 +50,19 @@ export function TranscriptDisplay({
     if (currentMode === "assistant") {
       return { Icon: MessageSquare, label: "AI 助手" };
     }
+if (activePresetNames.length > 0) {
+      const icon = activePresetNames.includes("词库增强") ? BookOpen : Sparkles;
+      return { Icon: icon, label: activePresetNames.join("、") };
+    }
+    // Priority: PostProcess (Polishing) > Dictionary Enhancement
     if (enablePostProcess) {
-      const presetLabel = activePresetName || "智能";
-      return { Icon: Sparkles, label: `润色 (${presetLabel})` };
+      return { Icon: Sparkles, label: "智能润色" };
     }
     if (enableDictionaryEnhancement) {
       return { Icon: BookOpen, label: "词库增强" };
     }
-    return { Icon: Sparkles, label: "文本规范化" };
+// Fallback
+    return { Icon: Sparkles, label: "智能润色" };
   };
 
   const { Icon: StatusIcon, label: statusLabel } = getStatusConfig();

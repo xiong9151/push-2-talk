@@ -169,6 +169,18 @@ impl Drop for ProcessingStopGuard<'_> {
     }
 }
 
+/// RAII guard that resets is_assistant_processing to false on drop (even on panic).
+/// Prevents the flag from being permanently stuck if an async block panics (e.g. LLM client).
+struct AssistantProcessingGuard<'a> {
+    flag: &'a AtomicBool,
+}
+
+impl Drop for AssistantProcessingGuard<'_> {
+    fn drop(&mut self) {
+        self.flag.store(false, Ordering::SeqCst);
+    }
+}
+
 /// RAII guard that returns a TextInserter into its Arc<Mutex<Option>> on drop (even on panic).
 /// Prevents the inserter from being permanently lost if code between take() and reassignment panics.
 struct TextInserterGuard<'a> {
@@ -179,9 +191,8 @@ struct TextInserterGuard<'a> {
 impl Drop for TextInserterGuard<'_> {
     fn drop(&mut self) {
         if let Some(ins) = self.inserter.take() {
-            if let Ok(mut guard) = self.target.lock() {
-                *guard = Some(ins);
-            }
+            let mut guard = self.target.lock().unwrap_or_else(|e| e.into_inner());
+            *guard = Some(ins);
         }
     }
 }
@@ -475,10 +486,12 @@ fn start_builtin_dictionary_updater(
     let builtin_hotwords_raw = Arc::clone(builtin_hotwords_raw);
     tauri::async_runtime::spawn(async move {
         let updater_loop = async {
+            // 启动时立即刷新一次，然后每 6 小时刷新一次
+            refresh_builtin_dictionary_once(&app_handle, &builtin_hotwords_raw).await;
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(
                 BUILTIN_DICTIONARY_UPDATE_INTERVAL_SECS,
             ));
-            // Skip the first immediate tick (tokio::time::interval's first tick returns instantly)
+            // interval::tick() 第一次调用会立即返回（tokio 行为），消耗掉它以避免双次刷新
             interval.tick().await;
             loop {
                 interval.tick().await;
@@ -1149,7 +1162,65 @@ async fn handle_recording_start(
             Some(config::AsrProvider::Custom) => {
                 // Custom ASR provider does not support realtime mode; fall through to HTTP mode
                 tracing::warn!("自定义 ASR 提供商不支持实时模式，回退到 HTTP 模式");
+                // 检查并停止可能仍在活动的 streaming_recorder，防止音频设备独占冲突
+                let mut streaming_guard = streaming_recorder.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(ref mut stream_rec) = *streaming_guard {
+                    if stream_rec.is_recording() {
+                        tracing::warn!("发现正在进行的流式录音，先停止它");
+                        let _ = stream_rec.stop_streaming();
+                    }
+                }
+                drop(streaming_guard);
                 let mut recorder_guard = recorder.lock().unwrap_or_else(|e| e.into_inner());
+                if recorder_guard.is_none() {
+                    tracing::info!("AudioRecorder 未初始化，按需创建 HTTP 模式录音器");
+                    match AudioRecorder::new() {
+                        Ok(new_rec) => {
+                            *recorder_guard = Some(new_rec);
+                        }
+                        Err(e) => {
+                            emit_error_and_hide_overlay(&app, format!("初始化录音器失败: {}", e)).await;
+                            return;
+                        }
+                    }
+                }
+                if let Some(ref mut rec) = *recorder_guard {
+                    if rec.is_recording() {
+                        tracing::warn!("发现正在进行的录音，先停止它");
+                        let _ = rec.stop_recording_to_memory();
+                    }
+                    if let Err(e) = rec.start_recording(Some(app.clone())) {
+                        emit_error_and_hide_overlay(&app, format!("录音失败: {}", e)).await;
+                    }
+                } else {
+                    emit_error_and_hide_overlay(&app, "录音器未初始化".to_string()).await;
+                }
+            }
+            Some(config::AsrProvider::SiliconFlow) => {
+                // SiliconFlow/SenseVoice 不支持实时模式，回退到 HTTP 模式
+                tracing::warn!("SiliconFlow/SenseVoice 不支持实时模式，回退到 HTTP 模式");
+                // 检查并停止可能仍在活动的 streaming_recorder，防止音频设备独占冲突
+                let mut streaming_guard = streaming_recorder.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(ref mut stream_rec) = *streaming_guard {
+                    if stream_rec.is_recording() {
+                        tracing::warn!("发现正在进行的流式录音，先停止它");
+                        let _ = stream_rec.stop_streaming();
+                    }
+                }
+                drop(streaming_guard);
+                let mut recorder_guard = recorder.lock().unwrap_or_else(|e| e.into_inner());
+                if recorder_guard.is_none() {
+                    tracing::info!("AudioRecorder 未初始化，按需创建 HTTP 模式录音器");
+                    match AudioRecorder::new() {
+                        Ok(new_rec) => {
+                            *recorder_guard = Some(new_rec);
+                        }
+                        Err(e) => {
+                            emit_error_and_hide_overlay(&app, format!("初始化录音器失败: {}", e)).await;
+                            return;
+                        }
+                    }
+                }
                 if let Some(ref mut rec) = *recorder_guard {
                     if rec.is_recording() {
                         tracing::warn!("发现正在进行的录音，先停止它");
@@ -1673,6 +1744,32 @@ async fn start_app(
         }
     }
 
+    // 强制覆盖：Custom ASR 不支持实时模式，自动回退到 HTTP 模式
+    if let Some(ref cfg) = asr_config {
+        if matches!(
+            cfg.selection.active_provider,
+            config::AsrProvider::Custom
+        ) {
+            if use_realtime_mode {
+                tracing::info!("自定义 ASR 提供商不支持实时模式，已自动切换为 HTTP 模式");
+            }
+            use_realtime_mode = false;
+        }
+    }
+
+    // 强制覆盖：SiliconFlow/SenseVoice 不支持实时模式，自动回退到 HTTP 模式
+    if let Some(ref cfg) = asr_config {
+        if matches!(
+            cfg.selection.active_provider,
+            config::AsrProvider::SiliconFlow
+        ) {
+            if use_realtime_mode {
+                tracing::info!("SiliconFlow/SenseVoice 不支持实时模式，已自动切换为 HTTP 模式");
+            }
+            use_realtime_mode = false;
+        }
+    }
+
     *state.use_realtime_asr.lock().unwrap_or_else(|e| e.into_inner()) = use_realtime_mode;
 
     // 确定是否启用 LLM 后处理
@@ -2121,12 +2218,17 @@ async fn start_app(
             return; // 不停止录音，等待用户点击悬浮窗按钮
         }
 
-        // === 防止与 finish_locked_recording 竞态 ===
-        // 如果 finish_locked_recording 已经在处理，跳过 on_stop
-        if is_processing_stop_stop.load(Ordering::SeqCst) {
+        // === 防止与 finish_locked_recording 竞态（以及 rdev ghost key 自重复） ===
+        // 使用 compare_exchange 原子设置标志，确保只有一个路径能继续执行
+        if is_processing_stop_stop
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
             tracing::info!("finish_locked_recording 正在处理中，跳过 on_stop");
             return;
         }
+        // 克隆 is_processing_stop_stop 以便在 async 块内持有 guard
+        let is_processing_stop = Arc::clone(&is_processing_stop_stop);
 
         tracing::info!("检测到快捷键释放，模式: {:?}", trigger_mode);
 
@@ -2168,6 +2270,8 @@ async fn start_app(
         beep_player::play_stop_beep();
 
         tauri::async_runtime::spawn(async move {
+            // ProcessingStopGuard 在闭包内持有，确保 is_processing_stop 在整个流水线处理期间保持 true
+            let _stop_guard_inner = ProcessingStopGuard { flag: &*is_processing_stop };
             let _ = app.emit("recording_stopped", ());
 
             match trigger_mode {
@@ -2312,6 +2416,21 @@ async fn handle_assistant_mode(
     usage_stats: Arc<Mutex<UsageStats>>,
     recording_start_instant: Arc<Mutex<Option<std::time::Instant>>>,
 ) {
+    // 原子 CAS 防并行触发：rdev ghost key 可能导致两个管道并行进入此处，
+    // 将 compare_exchange 放在函数最开头，确保 ASR 阶段开始之前就拒绝第二个管道。
+    let state = app.state::<AppState>();
+    if state
+        .is_assistant_processing
+        .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+        .is_err()
+    {
+        tracing::warn!("AI 助手: 已有处理在进行中，忽略并行触发（疑似热键双触发）");
+        hide_overlay_window(&app).await;
+        let _ = recording_start_instant.lock().unwrap_or_else(|e| e.into_inner()).take();
+        return;
+    }
+    let _guard = AssistantProcessingGuard { flag: &state.is_assistant_processing };
+
     let _ = app.emit("transcribing", ());
     let asr_start = std::time::Instant::now();
 
@@ -2368,6 +2487,12 @@ async fn handle_assistant_mode(
                 } else {
                     Err(anyhow::anyhow!("没有活跃的豆包输入法会话"))
                 }
+            }
+            Some(config::AsrProvider::Custom) => {
+                Err(anyhow::anyhow!("Custom ASR 提供商不支持实时模式"))
+            }
+            Some(config::AsrProvider::SiliconFlow) => {
+                Err(anyhow::anyhow!("SiliconFlow/SenseVoice 不支持实时模式"))
             }
             _ => {
                 let mut session_guard = active_session.lock().await;
@@ -2553,17 +2678,6 @@ async fn handle_assistant_mode(
     if let Some((session_id, history, prompt_mode)) = session_info {
         // =================== 追问路径 ===================
 
-        // 原子 CAS 防并行追问：热键双触发（rdev ghost key）会导致两个管道并行进入此处，
-        // 使用 compare_exchange 确保只有第一个管道能继续，第二个直接返回。
-        if state
-            .is_assistant_processing
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_err()
-        {
-            tracing::warn!("AI 助手: 已有追问在处理中，忽略并行触发（疑似热键双触发）");
-            return;
-        }
-
         // 发送 turn_pending 事件（前端立即显示用户消息 + loading）
         let pending_payload = TurnPendingPayload {
             user_instruction: user_instruction.clone(),
@@ -2621,7 +2735,6 @@ async fn handle_assistant_mode(
                     } else {
                         // 用户在处理期间关闭了面板，丢弃结果
                         tracing::warn!("AI 助手: 追问完成但会话已关闭，丢弃结果");
-                        state.is_assistant_processing.store(false, Ordering::SeqCst);
                         return;
                     }
                 }
@@ -2650,29 +2763,15 @@ async fn handle_assistant_mode(
                 // 发送 turn_error 事件（不写入 turns，用户可重试）
                 let error_payload = TurnErrorPayload {
                     session_id,
-                    error_message: format!("{}", e),
+                    error_message: sanitize_error_for_frontend(&format!("{}", e)),
                 };
                 let _ = app.emit("assistant_turn_error", error_payload);
                 tracing::error!("AI 助手追问失败: {}", e);
             }
         }
 
-        state.is_assistant_processing.store(false, Ordering::SeqCst);
     } else {
         // =================== 新会话路径 ===================
-
-        // 原子 CAS 防并行首轮触发（与追问路径相同的保护机制）
-        // rdev ghost key 可能导致两个管道并行进入此处
-        if state
-            .is_assistant_processing
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_err()
-        {
-            tracing::warn!("AI 助手: 已有首轮处理在进行中，忽略并行触发（疑似热键双触发）");
-            hide_overlay_window(&app).await;
-            let _ = recording_start_instant.lock().unwrap_or_else(|e| e.into_inner()).take();
-            return;
-        }
 
         // 确定 PromptMode（首轮锁定）
         let prompt_mode = if selected_text.is_some() {
@@ -2769,11 +2868,9 @@ async fn handle_assistant_mode(
                     asr_time_ms,
                     llm_time_ms
                 );
-                state.is_assistant_processing.store(false, Ordering::SeqCst);
             }
             Err(e) => {
                 let _ = recording_start_instant.lock().unwrap_or_else(|e| e.into_inner()).take();
-                state.is_assistant_processing.store(false, Ordering::SeqCst);
                 tracing::error!("AI 助手处理失败: {}", e);
                 let _ = app.emit("error", sanitize_error_for_frontend(&format!("AI 助手处理失败: {}", e)));
             }
@@ -2820,10 +2917,10 @@ async fn transcribe_with_available_clients(
                 }
             }
             _ => {
-                // 其他组合或只有主客户端，使用主客户端
-                match active_provider {
+                // 通用回退：先尝试主提供商，失败后尝试配置的回退提供商
+                let primary_result = match active_provider {
                     Some(config::AsrProvider::Qwen) => {
-                        if let Some(q) = qwen {
+                        if let Some(q) = qwen.as_ref() {
                             tracing::info!("{}使用千问 ASR", log_prefix);
                             q.transcribe_bytes(audio_data).await
                         } else {
@@ -2831,7 +2928,7 @@ async fn transcribe_with_available_clients(
                         }
                     }
                     Some(config::AsrProvider::Doubao) => {
-                        if let Some(d) = doubao {
+                        if let Some(d) = doubao.as_ref() {
                             tracing::info!("{}使用豆包 ASR", log_prefix);
                             d.transcribe_bytes(audio_data).await
                         } else {
@@ -2839,7 +2936,7 @@ async fn transcribe_with_available_clients(
                         }
                     }
                     Some(config::AsrProvider::SiliconFlow) => {
-                        if let Some(s) = sensevoice {
+                        if let Some(s) = sensevoice.as_ref() {
                             tracing::info!("{}使用 SenseVoice ASR", log_prefix);
                             s.transcribe_bytes(audio_data).await
                         } else {
@@ -2849,13 +2946,13 @@ async fn transcribe_with_available_clients(
                     Some(config::AsrProvider::DoubaoIme) => {
                         // 豆包输入法只支持实时流式，不支持 HTTP 模式
                         // 自动尝试第一个可用的 HTTP 提供商
-                        if let Some(q) = &qwen {
+                        if let Some(q) = qwen.as_ref() {
                             tracing::info!("{}DoubaoIme 不支持 HTTP，回退到千问", log_prefix);
                             q.transcribe_bytes(audio_data).await
-                        } else if let Some(d) = &doubao {
+                        } else if let Some(d) = doubao.as_ref() {
                             tracing::info!("{}DoubaoIme 不支持 HTTP，回退到豆包", log_prefix);
                             d.transcribe_bytes(audio_data).await
-                        } else if let Some(s) = &sensevoice {
+                        } else if let Some(s) = sensevoice.as_ref() {
                             tracing::info!("{}DoubaoIme 不支持 HTTP，回退到 SenseVoice", log_prefix);
                             s.transcribe_bytes(audio_data).await
                         } else {
@@ -2883,7 +2980,58 @@ async fn transcribe_with_available_clients(
                         tracing::error!("{}未配置 ASR 提供商", log_prefix);
                         Err(anyhow::anyhow!("ASR 提供商未配置"))
                     }
+                };
+
+                // 主提供商失败且配置了回退提供商时，尝试回退
+                if primary_result.is_err() {
+                    if let Some(fb) = fallback_provider {
+                        tracing::warn!("{}主提供商失败，尝试回退到 {:?}", log_prefix, fb);
+                        return match fb {
+                            config::AsrProvider::SiliconFlow => {
+                                if let Some(s) = sensevoice.as_ref() {
+                                    s.transcribe_bytes(audio_data).await
+                                } else {
+                                    primary_result
+                                }
+                            }
+                            config::AsrProvider::Qwen => {
+                                if let Some(q) = qwen.as_ref() {
+                                    q.transcribe_bytes(audio_data).await
+                                } else {
+                                    primary_result
+                                }
+                            }
+                            config::AsrProvider::Doubao => {
+                                if let Some(d) = doubao.as_ref() {
+                                    d.transcribe_bytes(audio_data).await
+                                } else {
+                                    primary_result
+                                }
+                            }
+                            config::AsrProvider::DoubaoIme => {
+                                tracing::warn!("{}回退提供商 DoubaoIme 不支持 HTTP 模式", log_prefix);
+                                primary_result
+                            }
+                            config::AsrProvider::Custom => {
+                                let config_load = AppConfig::load().ok();
+                                let custom_name = config_load
+                                    .as_ref()
+                                    .map(|(c, _)| c.asr_config.selection.fallback_custom_asr_name.clone())
+                                    .unwrap_or_default();
+                                let provider = config_load
+                                    .as_ref()
+                                    .and_then(|(c, _)| c.custom_asr_providers.iter().find(|p| p.name == custom_name && p.enabled));
+                                if let Some(p) = provider {
+                                    transcribe_with_custom_asr(p, audio_data).await
+                                } else {
+                                    tracing::warn!("{}回退提供商 Custom 未找到", log_prefix);
+                                    primary_result
+                                }
+                            }
+                        };
+                    }
                 }
+                primary_result
             }
         }
     } else {
@@ -3034,7 +3182,6 @@ async fn handle_http_transcription(
             recording_start_instant,
         )
         .await;
-        }
     } else {
         // audio_data is None — emit error feedback to frontend
         tracing::warn!("handle_http_transcription: 未获取到音频数据");
@@ -3192,6 +3339,27 @@ async fn handle_realtime_stop(
                 } else {
                     emit_error_and_hide_overlay(&app, "没有录制到音频数据".to_string()).await;
                 }
+            }
+        }
+        Some(config::AsrProvider::Custom) => {
+            tracing::warn!("自定义 ASR 提供商不支持实时模式，回退到 HTTP 转录");
+            if let Some(audio_data) = audio_data {
+                fallback_transcription(
+                    app,
+                    post_processor,
+                    text_inserter,
+                    Arc::clone(&qwen_client_state),
+                    Arc::clone(&sensevoice_client_state),
+                    Arc::clone(&doubao_client_state),
+                    audio_data,
+                    enable_fb,
+                    target_hwnd,
+                    usage_stats,
+                    recording_start_instant,
+                )
+                .await;
+            } else {
+                emit_error_and_hide_overlay(&app, "自定义 ASR 提供商不支持实时模式，无音频数据可用".to_string()).await;
             }
         }
         Some(config::AsrProvider::DoubaoIme) => {
@@ -3481,26 +3649,38 @@ fn sanitize_error_for_frontend(msg: &str) -> String {
     // Use simple substring matching rather than regex to avoid adding a dependency.
     let mut result = msg.to_string();
 
-    // Mask "sk-" API keys (e.g. sk-abc123...)
+    // Mask "sk-" API keys (e.g. sk-abc123...), with word boundary check to avoid
+    // matching "task-", "desk-", "mask-" etc.
     if let Some(pos) = result.find("sk-") {
-        let end = result[pos..].find(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
-            .map(|end| pos + end)
-            .unwrap_or(result.len());
-        let key_len = end - pos;
-        if key_len >= 8 {
-            result.replace_range(pos..end, "sk-***");
+        // Word boundary: position must be 0, or preceding char is not alphanumeric
+        let has_boundary = pos == 0
+            || !result[..pos]
+                .chars()
+                .last()
+                .map(|c| c.is_alphanumeric())
+                .unwrap_or(false);
+        if has_boundary {
+            let end = result[pos..].find(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
+                .map(|end| pos + end)
+                .unwrap_or(result.len());
+            let key_len = end - pos;
+            if key_len >= 8 {
+                result.replace_range(pos..end, "sk-***");
+            }
         }
     }
 
-    // Mask "Bearer " tokens
-    if let Some(pos) = result.to_lowercase().find("bearer ") {
-        let actual_pos = result[pos..].find("bearer ").map(|p| pos + p).unwrap_or(pos);
-        let end = result[actual_pos + 7..]
-            .find(|c: char| c.is_whitespace() || c == '"' || c == '\'')
-            .map(|end| actual_pos + 7 + end)
-            .unwrap_or(result.len());
-        if end > actual_pos + 7 {
-            result.replace_range(actual_pos..end, "Bearer ***");
+    // Mask "Bearer " tokens (case-sensitive search to avoid matching a lowercase
+    // "bearer" that appears before the real capitalized "Bearer" token)
+    for prefix in &["Bearer ", "bearer ", "BEARER "] {
+        if let Some(pos) = result.find(prefix) {
+            let end = result[pos + prefix.len()..]
+                .find(|c: char| c.is_whitespace() || c == '"' || c == '\'')
+                .map(|end| pos + prefix.len() + end)
+                .unwrap_or(result.len());
+            if end > pos + prefix.len() {
+                result.replace_range(pos..end, "Bearer ***");
+            }
         }
     }
 
@@ -3528,6 +3708,45 @@ fn sanitize_error_for_frontend(msg: &str) -> String {
         if end > start {
             result.replace_range(start..end, "***");
         }
+    }
+
+    // Mask "access_token=" values (e.g. doubao_access_token in URLs or query params)
+    if let Some(pos) = result.find("access_token=") {
+        let start = pos + 13;
+        let end = result[start..]
+            .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '&')
+            .map(|end| start + end)
+            .unwrap_or(result.len());
+        if end > start {
+            result.replace_range(start..end, "***");
+        }
+    }
+
+    // Generic heuristic: mask any long (>=28 chars) continuous alphanumeric/dash/underscore
+    // sequence that looks like an API key or token regardless of prefix.
+    // This catches keys/tokens that don't start with sk-, Bearer, or known parameter names.
+    let bytes = result.as_bytes();
+    let mut i = 0;
+    let mut runs: Vec<(usize, usize)> = Vec::new();
+    while i < result.len() {
+        if bytes[i].is_ascii_alphanumeric() || bytes[i] == b'-' || bytes[i] == b'_' {
+            let start = i;
+            while i < result.len()
+                && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'-' || bytes[i] == b'_')
+            {
+                i += 1;
+            }
+            let run_len = i - start;
+            if run_len >= 28 {
+                runs.push((start, i));
+            }
+        } else {
+            i += 1;
+        }
+    }
+    // Replace from right to left to preserve positions
+    for (start, end) in runs.into_iter().rev() {
+        result.replace_range(start..end, "***");
     }
 
     result
@@ -3595,10 +3814,11 @@ async fn handle_transcription_result(
     let enable_dictionary_enhancement = { *state.enable_dictionary_enhancement.lock().unwrap_or_else(|e| e.into_inner()) };
 
     // 读取 TNL 开关和 LLM 配置（避免 pipeline 内做同步文件 I/O）
-    let config = AppConfig::load().unwrap_or((AppConfig::new(), false));
-    let tnl_enabled = config.0.tnl_config.enabled;
-    let llm_config = config.0.llm_config.clone();
-    let enable_result_selection = config.0.enable_result_selection;
+    // 使用 load_persisted_config 持有 CONFIG_LOCK 读取配置文件，避免与 save_config 竞态
+    let config = load_persisted_config().unwrap_or(AppConfig::new());
+    let tnl_enabled = config.tnl_config.enabled;
+    let llm_config = config.llm_config.clone();
+    let enable_result_selection = config.enable_result_selection;
 
     // 听写模式：只使用 NormalPipeline
     let pipeline = NormalPipeline::new();
@@ -4640,6 +4860,7 @@ async fn send_text_question(
     {
         return Err("正在处理中，请稍候".into());
     }
+    let _guard = AssistantProcessingGuard { flag: &state.is_assistant_processing };
 
     // 4. 发 pending 事件（前端立即显示用户消息 + loading）
     let pending_payload = TurnPendingPayload {
@@ -4676,7 +4897,6 @@ async fn send_text_question(
                 } else {
                     // 用户在处理期间关闭了面板，丢弃结果
                     tracing::warn!("AI 助手: 文本追问完成但会话已关闭，丢弃结果");
-                    state.is_assistant_processing.store(false, Ordering::SeqCst);
                     return Ok(());
                 }
             }
@@ -4700,14 +4920,12 @@ async fn send_text_question(
         Err(e) => {
             let error_payload = TurnErrorPayload {
                 session_id,
-                error_message: format!("{}", e),
+                error_message: sanitize_error_for_frontend(&format!("{}", e)),
             };
             let _ = app.emit("assistant_turn_error", error_payload);
             tracing::error!("AI 助手文本追问失败: {}", e);
         }
     }
-
-    state.is_assistant_processing.store(false, Ordering::SeqCst);
 
     Ok(())
 }
@@ -5357,7 +5575,7 @@ pub fn run() {
                             .await
                             {
                                 tracing::error!("托盘切换 ASR 到千问失败: {}", e);
-                                let _ = app_handle.emit("error", e);
+                                let _ = app_handle.emit("error", sanitize_error_for_frontend(&e));
                             }
                         });
                     }
@@ -5377,7 +5595,7 @@ pub fn run() {
                             .await
                             {
                                 tracing::error!("托盘切换 ASR 到豆包失败: {}", e);
-                                let _ = app_handle.emit("error", e);
+                                let _ = app_handle.emit("error", sanitize_error_for_frontend(&e));
                             }
                         });
                     }
@@ -5397,7 +5615,7 @@ pub fn run() {
                             .await
                             {
                                 tracing::error!("托盘切换 ASR 到豆包输入法失败: {}", e);
-                                let _ = app_handle.emit("error", e);
+                                let _ = app_handle.emit("error", sanitize_error_for_frontend(&e));
                             }
                         });
                     }

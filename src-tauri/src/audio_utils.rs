@@ -110,10 +110,10 @@ pub fn is_voice_active(samples: &[f32]) -> bool {
 const MIN_AUDIO_DURATION_SAMPLES: usize = 8000; // 0.5秒 @ 16kHz
 const MIN_AUDIO_RMS: f32 = 0.02; // 静音阈值（需高于麦克风底噪）
 
-/// 解析 WAV 文件头，找到 PCM 数据在文件中的偏移量（字节位置）
+/// 解析 WAV 文件头，找到 PCM 数据在文件中的偏移量（字节位置）和 chunk 大小
 ///
 /// 不依赖固定的 44 字节偏移量，支持包含 fact 等扩展 Chunk 的 WAV 文件。
-fn find_wav_data_offset(wav_data: &[u8]) -> Result<usize> {
+fn find_wav_data_offset(wav_data: &[u8]) -> Result<(usize, usize)> {
     if wav_data.len() < 12 {
         return Err(anyhow::anyhow!("WAV 数据过短"));
     }
@@ -121,9 +121,18 @@ fn find_wav_data_offset(wav_data: &[u8]) -> Result<usize> {
         return Err(anyhow::anyhow!("无效的 WAV 文件头"));
     }
 
+    // 校验 RIFF chunk 总大小（第 4-7 字节，文件长度 - 8），约束遍历范围
+    let riff_size = u32::from_le_bytes([
+        wav_data[4],
+        wav_data[5],
+        wav_data[6],
+        wav_data[7],
+    ]) as usize;
+    let end = (riff_size + 8).min(wav_data.len());
+
     // 从 "WAVE" 之后开始遍历 Chunk
     let mut offset = 12;
-    while offset + 8 <= wav_data.len() {
+    while offset + 8 <= end {
         let chunk_id = &wav_data[offset..offset + 4];
         let chunk_size = u32::from_le_bytes([
             wav_data[offset + 4],
@@ -132,9 +141,14 @@ fn find_wav_data_offset(wav_data: &[u8]) -> Result<usize> {
             wav_data[offset + 7],
         ]) as usize;
 
+        // 校验 chunk 内容不超出缓冲区边界，防止恶意超大 chunk_size 导致越界
+        if offset + 8 + chunk_size > wav_data.len() {
+            return Err(anyhow::anyhow!("WAV chunk 超出文件边界"));
+        }
+
         if chunk_id == b"data" {
             // data chunk 内容从 chunk_id(4) + chunk_size(4) 后开始
-            return Ok(offset + 8);
+            return Ok((offset + 8, chunk_size));
         }
 
         // 跳到下一个 Chunk（每个 Chunk 按偶数字节对齐）
@@ -161,9 +175,9 @@ pub fn validate_audio(audio_data: &[u8]) -> Result<()> {
         return Err(anyhow::anyhow!("音频数据为空"));
     }
 
-    // 检查2：解析 WAV 头找到实际 data chunk 偏移量（支持扩展 WAV header）
-    let data_offset = find_wav_data_offset(audio_data)?;
-    let pcm_data = &audio_data[data_offset..];
+    // 检查2：解析 WAV 头找到实际 data chunk 偏移量和大小（支持扩展 WAV header）
+    let (data_offset, chunk_size) = find_wav_data_offset(audio_data)?;
+    let pcm_data = &audio_data[data_offset..data_offset + chunk_size];
     let samples: Vec<i16> = pcm_data
         .chunks_exact(2)
         .map(|c| i16::from_le_bytes([c[0], c[1]]))

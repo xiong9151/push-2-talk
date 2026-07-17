@@ -271,17 +271,19 @@ impl ConnectionPool {
         tokio::spawn(async move {
             let mut final_text = String::new();
             let mut has_result = false;
+            let mut result_sent = false;
 
             loop {
-                let msg = match timeout(Duration::from_secs(30), read.next()).await {
+                let msg = match timeout(Duration::from_secs(90), read.next()).await {
                     Ok(Some(msg)) => msg,
                     Ok(None) => break, // 流已关闭
                     Err(_) => {
-                        tracing::warn!("Qwen WebSocket 接收超时（30秒无事件），断开连接");
-                        if !has_result {
+                        tracing::warn!("Qwen WebSocket 接收超时（90秒无事件），断开连接");
+                        if !result_sent {
                             let _ = result_tx
                                 .send(Err(anyhow::anyhow!("WebSocket 接收超时")))
                                 .await;
+                            result_sent = true;
                         }
                         break;
                     }
@@ -330,10 +332,18 @@ impl ConnectionPool {
                                         let _ = live_transcript_tx.try_send(final_text.clone());
                                     }
                                     "response.done" => {
-                                        // 响应完成，发送结果（即使 final_text 为空也正常返回）
-                                        let _ = result_tx
-                                            .send(Ok(final_text.clone()))
-                                            .await;
+                                        // 响应完成
+                                        if final_text.is_empty() {
+                                            // 空文本表示未检测到语音输入，触发上游 fallback
+                                            let _ = result_tx
+                                                .send(Err(anyhow::anyhow!("未检测到语音输入")))
+                                                .await;
+                                        } else {
+                                            let _ = result_tx
+                                                .send(Ok(final_text.clone()))
+                                                .await;
+                                        }
+                                        result_sent = true;
                                         return;
                                     }
                                     "error" => {
@@ -378,6 +388,7 @@ impl ConnectionPool {
                         let _ = result_tx
                             .send(Err(anyhow::anyhow!("录音无效，已跳过")))
                             .await;
+                        result_sent = true;
                         break;
                     }
 
@@ -385,12 +396,13 @@ impl ConnectionPool {
                     crate::asr::utils::strip_trailing_punctuation(&mut final_text);
 
                     let _ = result_tx.send(Ok(final_text.clone())).await;
+                    result_sent = true;
                     break;
                 }
             }
 
             // 如果循环结束但没有发送结果
-            if !has_result {
+            if !result_sent {
                 let _ = result_tx.send(Err(anyhow::anyhow!("未收到转录结果"))).await;
             }
         });

@@ -41,6 +41,15 @@ fn generate_websocket_key() -> String {
 pub struct DoubaoRealtimeSession {
     sender: mpsc::Sender<SessionCommand>,
     result_receiver: mpsc::Receiver<Result<String>>,
+    receiver_handle: Option<tokio::task::JoinHandle<()>>,
+}
+
+impl Drop for DoubaoRealtimeSession {
+    fn drop(&mut self) {
+        if let Some(handle) = self.receiver_handle.take() {
+            handle.abort();
+        }
+    }
 }
 
 enum SessionCommand {
@@ -168,30 +177,34 @@ impl DoubaoRealtimeClient {
         write.send(Message::Binary(msg.clone().into())).await?;
         tracing::debug!("豆包 Full Client Request 已发送: {} bytes", msg.len());
 
-        // 等待 Full Client Request 的响应
-        if let Some(response) = read.next().await {
-            match response {
-                Ok(Message::Binary(data)) => {
-                    tracing::debug!("豆包 Full Client Request 响应: {} bytes", data.len());
-                    // 解析响应检查是否成功（适配新的返回类型）
-                    match parse_response(&data) {
-                        Ok((text, _is_last)) => {
-                            if !text.is_empty() {
-                                tracing::debug!("豆包初始响应包含文本（意外）: {}", text);
+        // 等待 Full Client Request 的响应（带超时）
+        match timeout(Duration::from_secs(TRANSCRIPTION_TIMEOUT_SECS), read.next()).await {
+            Ok(Some(response)) => {
+                match response {
+                    Ok(Message::Binary(data)) => {
+                        tracing::debug!("豆包 Full Client Request 响应: {} bytes", data.len());
+                        // 解析响应检查是否成功（适配新的返回类型）
+                        match parse_response(&data) {
+                            Ok((text, _is_last)) => {
+                                if !text.is_empty() {
+                                    tracing::debug!("豆包初始响应包含文本（意外）: {}", text);
+                                }
+                            }
+                            Err(e) => {
+                                tracing::debug!("豆包初始响应（预期无文本）: {}", e);
                             }
                         }
-                        Err(e) => {
-                            tracing::debug!("豆包初始响应（预期无文本）: {}", e);
-                        }
+                    }
+                    Ok(other) => {
+                        tracing::warn!("豆包 Full Client Request 收到非二进制响应: {:?}", other);
+                    }
+                    Err(e) => {
+                        return Err(anyhow::anyhow!("豆包 Full Client Request 响应错误: {}", e));
                     }
                 }
-                Ok(other) => {
-                    tracing::warn!("豆包 Full Client Request 收到非二进制响应: {:?}", other);
-                }
-                Err(e) => {
-                    return Err(anyhow::anyhow!("豆包 Full Client Request 响应错误: {}", e));
-                }
             }
+            Ok(None) => return Err(anyhow::anyhow!("Full Client Request 无响应，连接已关闭")),
+            Err(_) => return Err(anyhow::anyhow!("Full Client Request 响应超时")),
         }
 
         let (cmd_tx, mut cmd_rx) = mpsc::channel::<SessionCommand>(100);
@@ -227,7 +240,7 @@ impl DoubaoRealtimeClient {
             }
         });
 
-        tokio::spawn(async move {
+        let receiver_handle = tokio::spawn(async move {
             let mut accumulated_text = String::new();
             let mut result_sent = false;
 
@@ -327,6 +340,7 @@ impl DoubaoRealtimeClient {
         Ok(DoubaoRealtimeSession {
             sender: cmd_tx,
             result_receiver: result_rx,
+            receiver_handle: Some(receiver_handle),
         })
     }
 }

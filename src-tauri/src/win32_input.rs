@@ -73,6 +73,29 @@ fn send_key_up(vk: VIRTUAL_KEY) -> Result<()> {
     Ok(())
 }
 
+/// RAII 守卫：确保任意键在作用域结束时被释放
+///
+/// 当发送按键组合中途失败时，对应键不会卡住
+#[cfg(target_os = "windows")]
+struct KeyGuard(VIRTUAL_KEY);
+
+#[cfg(target_os = "windows")]
+impl Drop for KeyGuard {
+    fn drop(&mut self) {
+        let _ = send_key_up(self.0);
+        tracing::trace!("KeyGuard(0x{:X}): 已释放键", self.0.0);
+    }
+}
+
+/// 按下指定键并返回 RAII 守卫
+///
+/// 守卫析构时自动释放该键，防止中途失败导致键卡住
+#[cfg(target_os = "windows")]
+fn press_key(vk: VIRTUAL_KEY) -> Result<KeyGuard> {
+    send_key_down(vk)?;
+    Ok(KeyGuard(vk))
+}
+
 /// RAII 守卫：确保 Ctrl 键在作用域结束时被释放
 ///
 /// 当 send_ctrl_c/send_ctrl_v 中途失败时，Ctrl 键不会卡住
@@ -105,12 +128,11 @@ pub fn send_ctrl_c() -> Result<()> {
     let _guard = press_ctrl()?;
     thread::sleep(Duration::from_millis(KEY_DELAY_MS));
 
-    // 按下并释放 C
-    send_key_down(VK_C)?;
-    thread::sleep(Duration::from_millis(KEY_DELAY_MS));
-    send_key_up(VK_C)?;
+    // 按下并释放 C（KeyGuard 确保释放，即使 send_key_up 失败）
+    let _c_guard = press_key(VK_C)?;
     thread::sleep(Duration::from_millis(KEY_DELAY_MS));
 
+    // _c_guard 在此析构，自动释放 C 键
     // _guard 在此析构，自动释放 Ctrl 键
     Ok(())
 }
@@ -123,12 +145,11 @@ pub fn send_ctrl_v() -> Result<()> {
     let _guard = press_ctrl()?;
     thread::sleep(Duration::from_millis(KEY_DELAY_MS));
 
-    // 按下并释放 V
-    send_key_down(VK_V)?;
-    thread::sleep(Duration::from_millis(KEY_DELAY_MS));
-    send_key_up(VK_V)?;
+    // 按下并释放 V（KeyGuard 确保释放，即使 send_key_up 失败）
+    let _v_guard = press_key(VK_V)?;
     thread::sleep(Duration::from_millis(KEY_DELAY_MS));
 
+    // _v_guard 在此析构，自动释放 V 键
     // _guard 在此析构，自动释放 Ctrl 键
     Ok(())
 }
@@ -185,8 +206,8 @@ pub fn send_unicode_text(text: &str) -> Result<()> {
     }
 
     let result = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
-    if result == 0 {
-        anyhow::bail!("SendInput Unicode 失败");
+    if result != inputs.len() as u32 {
+        anyhow::bail!("SendInput Unicode 仅处理了 {} / {} 个代码单元", result, inputs.len());
     }
 
     // 等待输入处理完成

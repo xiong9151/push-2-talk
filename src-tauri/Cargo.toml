@@ -46,6 +46,7 @@ flate2 = "1.0"
 lazy_static = "1.4"
 md5 = "0.7"
 sha2 = "0.10"
+hex = "0.4"
 
 # TNL 技术规范化层
 aho-corasick = "1.1"      # 多模式匹配（词库保护）

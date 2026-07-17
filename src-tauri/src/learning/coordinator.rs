@@ -530,27 +530,8 @@ async fn observe_correction_text(
             &observation_id[..8],
             check_count
         );
-        // 即使没有读取到文本，也尝试立即读取一次
-        if last_text.is_none() {
-            tracing::info!(
-                "Learning [{}]: 优雅取消时尚未读取到文本，尝试立即读取",
-                &observation_id[..8]
-            );
-            let text = tokio::task::spawn_blocking(move || get_text_via_uia(target_hwnd))
-                .await
-                .ok()
-                .flatten();
-            if let Some(content) = text {
-                if !content.trim().is_empty() {
-                    tracing::info!(
-                        "Learning [{}]: 优雅取消时立即读取成功（长度: {}）",
-                        &observation_id[..8],
-                        content.len()
-                    );
-                    last_text = Some(content);
-                }
-            }
-        }
+        // 上一个 spawn_blocking 的结果已在 last_text 中（如果已执行过循环迭代）
+        // 新任务会负责读取当前文本，无需在此额外读取，避免并发 UIA 访问风险
     } else if ended_due_to_focus_loss {
         // 数据可靠性较差：窗口失焦意味着后续读取可能不可靠。
         // 但如果在失焦前已成功读取到文本，仍可返回 last_text，避免学习功能过于脆弱。

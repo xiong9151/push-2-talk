@@ -269,6 +269,8 @@ function ResultList({
 // 主悬浮窗组件
 export default function OverlayWindow() {
   const [status, setStatus] = useState<OverlayStatus>("recording");
+  const statusRef = useRef(status);
+  useEffect(() => { statusRef.current = status; }, [status]);
   const [isLocked, setIsLocked] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const submitDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -397,7 +399,7 @@ export default function OverlayWindow() {
       if (!(await registerListener("transcription_complete", () => {
         // 如果已经是 results 状态，不要覆盖
         // 否则重置
-        if (status !== "results") {
+        if (statusRef.current !== "results") {
           setStatus("recording");
           setIsLocked(false);
           setIsSubmitting(false);
@@ -464,8 +466,10 @@ export default function OverlayWindow() {
         setIsSubmitting(true);
         try {
           await invoke("cancel_locked_recording");
+          setIsSubmitting(false);
         } catch (e) {
           console.error("取消锁定录音失败:", e);
+          setIsSubmitting(false);
         }
       }, 60000);
       return () => clearTimeout(timeout);
@@ -482,6 +486,7 @@ export default function OverlayWindow() {
     }, 300);
     try {
       await invoke("finish_locked_recording");
+      setIsLocked(false);
       setIsSubmitting(false);
     } catch (e) {
       console.error("完成录音失败:", e);

@@ -164,9 +164,9 @@ static TIMED_OUT_UIA_WORKERS: AtomicUsize = AtomicUsize::new(0);
 /// 限制最大并发工作线程数，防止 UIA 卡死时线程无限堆积
 ///
 /// # 超时处理（修复版）
-/// 超时后**不释放**配额，由工作线程完成后自己释放。
-/// 这样可以防止新请求进入，避免线程无限堆积。
-/// 超时的线程会被计入 TIMED_OUT_UIA_WORKERS 用于监控。
+/// 超时后**立即释放**配额，避免线程永久阻塞导致 ACTIVE_UIA_WORKERS 耗尽。
+/// 工作线程最终完成时，WorkerGuard 检测到超时标记，不再重复释放配额。
+/// 超时的线程会被计入 TIMED_OUT_UIA_WORKERS 用于监控，完成后自动减少。
 fn run_with_timeout<T, F>(timeout: Duration, f: F) -> Result<T>
 where
     T: Send + 'static,
@@ -212,16 +212,16 @@ where
         }
         impl Drop for WorkerGuard {
             fn drop(&mut self) {
-                // 无论是否超时，工作线程完成时都要减少活跃计数
-                ACTIVE_UIA_WORKERS.fetch_sub(1, Ordering::SeqCst);
-                // 如果是超时的线程完成了，减少超时计数
                 if self.timed_out.load(Ordering::SeqCst) {
+                    // 超时后配额已由主线程释放，只减少超时计数
                     TIMED_OUT_UIA_WORKERS.fetch_sub(1, Ordering::SeqCst);
                     tracing::debug!(
-                        "UIA 超时线程已完成，当前活跃: {}, 超时未完成: {}",
-                        ACTIVE_UIA_WORKERS.load(Ordering::Relaxed),
+                        "UIA 超时线程已完成，超时未完成: {}",
                         TIMED_OUT_UIA_WORKERS.load(Ordering::Relaxed)
                     );
+                } else {
+                    // 正常完成：释放配额
+                    ACTIVE_UIA_WORKERS.fetch_sub(1, Ordering::SeqCst);
                 }
             }
         }
@@ -234,12 +234,13 @@ where
     match rx.recv_timeout(timeout) {
         Ok(res) => res,
         Err(mpsc::RecvTimeoutError::Timeout) => {
-            // 超时：标记超时状态，但**不释放**配额
-            // 配额由工作线程完成后自己释放，防止新请求进入导致线程堆积
+            // 超时：立即释放配额，避免线程永久阻塞导致 ACTIVE_UIA_WORKERS 耗尽
+            // 工作线程最终完成时，WorkerGuard 检测到超时标记，不再重复释放
             timed_out.store(true, Ordering::SeqCst);
+            ACTIVE_UIA_WORKERS.fetch_sub(1, Ordering::SeqCst);
             TIMED_OUT_UIA_WORKERS.fetch_add(1, Ordering::SeqCst);
             tracing::warn!(
-                "UIA 调用超时（{:?}），配额保留直到线程完成，当前活跃: {}, 超时未完成: {}",
+                "UIA 调用超时（{:?}），配额已释放，当前活跃: {}, 超时未完成: {}",
                 timeout,
                 ACTIVE_UIA_WORKERS.load(Ordering::Relaxed),
                 TIMED_OUT_UIA_WORKERS.load(Ordering::Relaxed)

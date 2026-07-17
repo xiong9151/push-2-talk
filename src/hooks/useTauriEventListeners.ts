@@ -1,4 +1,4 @@
-import type React from "react";
+﻿import type React from "react";
 import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -67,7 +67,7 @@ export type UseTauriEventListenersParams = {
   setHistory: React.Dispatch<React.SetStateAction<HistoryRecord[]>>;
   setUsageStats?: React.Dispatch<React.SetStateAction<UsageStats>>;
 
-  /** 润色失败时的回调（用于显示 Toast 提示） */
+  /** 娑﹁壊澶辫触鏃剁殑鍥炶皟锛堢敤浜庢樉绀?Toast 鎻愮ず锛?*/
   onPolishingFailed?: (errorMessage: string) => void;
 };
 
@@ -120,19 +120,19 @@ export function useTauriEventListeners({
       });
     };
 
-    // 从后端重新加载统计数据（后端已自动更新）
+    // 浠庡悗绔噸鏂板姞杞界粺璁℃暟鎹紙鍚庣宸茶嚜鍔ㄦ洿鏂帮級
     const reloadUsageStats = async () => {
       if (!setUsageStats) return;
       try {
         const stats = await loadUsageStats();
         setUsageStats(stats);
       } catch (error) {
-        console.error('重新加载统计数据失败:', error);
+        console.error('閲嶆柊鍔犺浇缁熻鏁版嵁澶辫触:', error);
       }
     };
 
     const setup = async () => {
-      // 辅助函数：注册监听器并检查取消状态，解决 StrictMode 竞态条件
+      // 杈呭姪鍑芥暟锛氭敞鍐岀洃鍚櫒骞舵鏌ュ彇娑堢姸鎬侊紝瑙ｅ喅 StrictMode 绔炴€佹潯浠?
       const registerListener = async <T>(
         event: string,
         handler: (payload: T) => void | Promise<void>,
@@ -172,7 +172,7 @@ export function useTauriEventListeners({
 
         if (!(await registerListener<TranscriptionResult>("transcription_complete", (result) => {
           setTranscript(result.text);
-          // 只要有 original_text 就显示双栏（原始转写 + 润色结果）
+          // 鍙鏈?original_text 灏辨樉绀哄弻鏍忥紙鍘熷杞啓 + 娑﹁壊缁撴灉锛?
           setOriginalTranscript(result.original_text || null);
           setSelectedText(result.selected_text || null);
           setCurrentMode(result.mode || null);
@@ -181,7 +181,7 @@ export function useTauriEventListeners({
           setTotalTime(result.total_time_ms);
           setStatus("running");
 
-          // 后端已自动更新统计数据，前端只需重新加载
+          // 鍚庣宸茶嚜鍔ㄦ洿鏂扮粺璁℃暟鎹紝鍓嶇鍙渶閲嶆柊鍔犺浇
           reloadUsageStats();
 
           const llmConfig = llmConfigRef.current;
@@ -189,25 +189,25 @@ export function useTauriEventListeners({
           const enablePostProcess = enablePostProcessRef?.current ?? false;
           const enableDictionaryEnhancement = enableDictionaryEnhancementRef?.current ?? false;
 
-          // presetNames 逻辑：
-          // 1. 如果没有 original_text（未启用润色），不显示任何润色标签
-          // 2. 如果是 assistant 模式，不显示润色标签
-          // 3. 如果开启了润色，显示所有勾选的预设名称
-          // 4. 如果开启了词库增强，显示"词库增强"
-          // 5. 其他情况（仅 TNL 处理），显示"文本规范化"
+          // presetNames 閫昏緫锛?
+          // 1. 濡傛灉娌℃湁 original_text锛堟湭鍚敤娑﹁壊锛夛紝涓嶆樉绀轰换浣曟鼎鑹叉爣绛?
+          // 2. 濡傛灉鏄?assistant 妯″紡锛屼笉鏄剧ず娑﹁壊鏍囩
+          // 3. 濡傛灉寮€鍚簡娑﹁壊锛屾樉绀烘墍鏈夊嬀閫夌殑棰勮鍚嶇О
+          // 4. 濡傛灉寮€鍚簡璇嶅簱澧炲己锛屾樉绀?璇嶅簱澧炲己"
+          // 5. 鍏朵粬鎯呭喌锛堜粎 TNL 澶勭悊锛夛紝鏄剧ず"鏂囨湰瑙勮寖鍖?
           const hasPolishing = !!result.original_text;
           let presetNames: string[] = [];
           if (hasPolishing && mode !== "assistant") {
             if (enablePostProcess) {
-              // 收集所有勾选的预设名称
+              // 鏀堕泦鎵€鏈夊嬀閫夌殑棰勮鍚嶇О
               const selectedPresets = llmConfig?.presets.filter(
                 (p) => p.selected_for_display ?? true
               ) ?? [];
               presetNames = selectedPresets.map((p) => p.name);
             } else if (enableDictionaryEnhancement) {
-              presetNames = ["词库增强"];
+              presetNames = ["璇嶅簱澧炲己"];
             } else {
-              presetNames = ["文本规范化"];
+              presetNames = ["鏂囨湰瑙勮寖鍖?];
             }
           }
 
@@ -217,7 +217,7 @@ export function useTauriEventListeners({
             id: nanoid(8),
             timestamp: Date.now(),
             originalText: result.original_text || result.text,
-            // 只要有 original_text 就设置 polishedText
+            // 鍙鏈?original_text 灏辫缃?polishedText
             polishedText: hasPolishing ? result.text : null,
             selectedText: result.selected_text || null,
             presetName: presetNames.join(", ") || null,
@@ -232,13 +232,23 @@ export function useTauriEventListeners({
         }))) return;
 
         if (!(await registerListener<string>("error", (errMsg) => {
-          // 防御性清洗：移除可能泄露的 API key 模式（sk- 开头的密钥令牌）
-          const sanitized = errMsg.replace(/\b(sk-[a-zA-Z0-9_-]{8,})\b/g, '***');
+          // 防御性清洗：移除可能泄露的 API key 模式
+          const sanitized = errMsg
+            .replace(/\b(sk-[a-zA-Z0-9_-]{8,})\b/g, '***')
+            .replace(/\b([Bb]earer\s+[a-zA-Z0-9._-]{8,})\b/g, 'Bearer ***')
+            .replace(/\b([a-zA-Z0-9+/]{40,})\b/g, '***');
           setError(sanitized);
           setStatus("running");
+          setTranscript("");
+          setOriginalTranscript(null);
+          setSelectedText(null);
+          setCurrentMode(null);
+          setAsrTime(null);
+          setLlmTime(null);
+          setTotalTime(null);
 
-          // 注意：后端在错误情况下不会更新统计数据（只统计成功的录音）
-          // 这里重新加载是为了保持UI状态同步，但数据不会变化
+          // 娉ㄦ剰锛氬悗绔湪閿欒鎯呭喌涓嬩笉浼氭洿鏂扮粺璁℃暟鎹紙鍙粺璁℃垚鍔熺殑褰曢煶锛?
+          // 杩欓噷閲嶆柊鍔犺浇鏄负浜嗕繚鎸乁I鐘舵€佸悓姝ワ紝浣嗘暟鎹笉浼氬彉鍖?
           reloadUsageStats();
 
           addHistoryRecord({
@@ -259,6 +269,13 @@ export function useTauriEventListeners({
         if (!(await registerListener("transcription_cancelled", () => {
           setStatus("running");
           setError(null);
+          setTranscript("");
+          setOriginalTranscript(null);
+          setSelectedText(null);
+          setCurrentMode(null);
+          setAsrTime(null);
+          setLlmTime(null);
+          setTotalTime(null);
         }))) return;
 
         if (!(await registerListener<AppConfig>("config_updated", (config) => {
@@ -315,23 +332,28 @@ export function useTauriEventListeners({
             );
             onBuiltinDictionaryUpdated?.();
           } catch (error) {
-            console.error("刷新内置词库快照失败:", error);
+            console.error("鍒锋柊鍐呯疆璇嶅簱蹇収澶辫触:", error);
           }
         }))) return;
 
-        // 监听润色失败事件（让用户知道润色尝试过但失败了）
+        // 鐩戝惉娑﹁壊澶辫触浜嬩欢锛堣鐢ㄦ埛鐭ラ亾娑﹁壊灏濊瘯杩囦絾澶辫触浜嗭級
         if (!(await registerListener<string>("polishing_failed", (errorMessage) => {
-          console.warn("润色失败:", errorMessage);
-          onPolishingFailed?.(errorMessage);
+          console.warn("娑﹁壊澶辫触:", errorMessage);
+          // 防御性清洗：移除可能泄露的 API key 模式
+          const sanitized = errorMessage
+            .replace(/\b(sk-[a-zA-Z0-9_-]{8,})\b/g, '***')
+            .replace(/\b([Bb]earer\s+[a-zA-Z0-9._-]{8,})\b/g, 'Bearer ***')
+            .replace(/\b([a-zA-Z0-9+/]{40,})\b/g, '***');
+          onPolishingFailed?.(sanitized);
         }))) return;
 
         if (!(await registerListener("close_requested", async () => {
-          // 点击叉号始终最小化到系统托盘
-          // 如需彻底退出，请在系统托盘右键菜单中选择"退出"
+          // 鐐瑰嚮鍙夊彿濮嬬粓鏈€灏忓寲鍒扮郴缁熸墭鐩?
+          // 濡傞渶褰诲簳閫€鍑猴紝璇峰湪绯荤粺鎵樼洏鍙抽敭鑿滃崟涓€夋嫨"閫€鍑?
           try {
             await invoke("hide_to_tray");
           } catch {
-            // 如果 hide_to_tray 失败，回退到原来的逻辑
+            // 濡傛灉 hide_to_tray 澶辫触锛屽洖閫€鍒板師鏉ョ殑閫昏緫
             try {
               const config = await invoke<AppConfig>("load_config");
               if (config.close_action === "close") {
@@ -390,3 +412,5 @@ export function useTauriEventListeners({
     setTranscript,
   ]);
 }
+
+

@@ -132,6 +132,17 @@ const DEFAULT_ERROR: Omit<FriendlyError, 'details'> = {
 };
 
 /**
+ * 清洗可能包含 API Key 的错误消息，防止密钥泄露到 UI
+ * 与 useTauriEventListeners.ts 中的清洗逻辑保持一致
+ */
+export const sanitizeErrorMessage = (msg: string): string => {
+  return msg
+    .replace(/\b(sk-[a-zA-Z0-9_-]{8,})\b/g, '***')
+    .replace(/\b([Bb]earer\s+[a-zA-Z0-9._-]{8,})\b/g, 'Bearer ***')
+    .replace(/\b([a-zA-Z0-9+/]{40,})\b/g, '***');
+};
+
+/**
  * 将原始错误消息解析为用户友好的错误信息
  */
 export const parseError = (rawError: string | null | undefined): FriendlyError => {

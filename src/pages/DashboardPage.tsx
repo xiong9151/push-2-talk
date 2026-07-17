@@ -48,7 +48,7 @@ export function DashboardPage({
         asrTime={asrTime}
         llmTime={llmTime}
         totalTime={totalTime}
-        activePresetName={activePresetNames.join(", ") || null}
+activePresetNames={activePresetNames}
         transcriptEndRef={transcriptEndRef}
         onCopy={onCopyText}
         variant="compact"

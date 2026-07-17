@@ -12,12 +12,45 @@ use crate::audio_utils::{apply_agc, calculate_audio_level, emit_audio_level, val
 // API 要求的目标采样率
 const TARGET_SAMPLE_RATE: u32 = 16000;
 
+/// 线程安全的 cpal::Stream 包装器
+///
+/// 将 `cpal::Stream` 的 `!Send` 限制隔离到此包装器中，避免对整个
+/// `AudioRecorder` 使用 `unsafe impl Send`。
+///
+/// # Safety
+///
+/// cpal::Stream 在 Windows 平台（WASAPI）上可以安全地在任意线程 Drop。
+/// 原始的 `Stream` 之所以不实现 `Send`，是因为某些平台（如 Linux ALSA）
+/// 的音频句柄不允许跨线程 Drop。Windows WASAPI 没有此限制。
+/// 本项目是 Windows-only 桌面应用，因此此实现是 sound 的。
+struct SendStream {
+    inner: Option<Stream>,
+}
+
+// SAFETY: Windows WASAPI 音频流句柄可以安全地在任意线程 Drop。
+// 本项目仅为 Windows 平台设计，无需跨平台兼容。
+unsafe impl Send for SendStream {}
+
+impl SendStream {
+    fn none() -> Self {
+        Self { inner: None }
+    }
+
+    fn set(&mut self, stream: Stream) {
+        self.inner = Some(stream);
+    }
+
+    fn clear(&mut self) {
+        self.inner = None;
+    }
+}
+
 pub struct AudioRecorder {
     device_sample_rate: u32, // 设备实际采样率
     channels: u16,
     audio_data: Arc<Mutex<Vec<f32>>>,
     is_recording: Arc<Mutex<bool>>,
-    stream: Option<Stream>, // 保存 stream 引用
+    stream: SendStream, // 保存 stream 引用（Send 包装，安全跨线程 Drop）
 }
 
 impl AudioRecorder {
@@ -27,7 +60,7 @@ impl AudioRecorder {
             channels: 1,
             audio_data: Arc::new(Mutex::new(Vec::new())),
             is_recording: Arc::new(Mutex::new(false)),
-            stream: None,
+            stream: SendStream::none(),
         })
     }
 
@@ -214,7 +247,7 @@ impl AudioRecorder {
         stream.play()?;
 
         // 保存 stream 引用，保持录音流活跃
-        self.stream = Some(stream);
+        self.stream.set(stream);
 
         Ok(())
     }
@@ -227,7 +260,7 @@ impl AudioRecorder {
         *self.is_recording.lock().unwrap_or_else(|e| e.into_inner()) = false;
 
         // Drop stream，停止音频流
-        self.stream = None;
+        self.stream.clear();
 
         // 等待一小段时间确保所有数据都已写入
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -291,7 +324,7 @@ impl AudioRecorder {
     /// 停止录音并返回内存中的 WAV 数据，同时收集诊断信息
     pub fn stop_recording_with_diagnostics(&mut self) -> Result<(Vec<u8>, AudioDiagnostics)> {
         *self.is_recording.lock().unwrap_or_else(|e| e.into_inner()) = false;
-        self.stream = None;
+        self.stream.clear();
         std::thread::sleep(std::time::Duration::from_millis(100));
 
         let raw_audio = self.audio_data.lock().unwrap_or_else(|e| e.into_inner()).clone();
@@ -376,7 +409,7 @@ impl AudioRecorder {
         *self.is_recording.lock().unwrap_or_else(|e| e.into_inner()) = false;
 
         // Drop stream，停止音频流
-        self.stream = None;
+        self.stream.clear();
 
         // 等待一小段时间确保所有数据都已写入
         std::thread::sleep(std::time::Duration::from_millis(100));
@@ -460,7 +493,3 @@ pub struct AudioDiagnostics {
     /// WAV 文件大小（字节）
     pub wav_size_bytes: usize,
 }
-
-// 实现 Send 和 Sync traits
-unsafe impl Send for AudioRecorder {}
-unsafe impl Sync for AudioRecorder {}

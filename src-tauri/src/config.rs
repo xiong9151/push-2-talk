@@ -1459,8 +1459,38 @@ impl AppConfig {
 
         if path.exists() {
             let content = std::fs::read_to_string(&path)?;
-            match serde_json::from_str::<AppConfig>(&content) {
+
+            // 先解析为 Value，以便检测旧格式配置
+            let v: serde_json::Value = match serde_json::from_str(&content) {
+                Ok(v) => v,
+                Err(_) => return Self::load_with_migration(),
+            };
+
+            match serde_json::from_value::<AppConfig>(v.clone()) {
                 Ok(config) => {
+                    // 检测旧格式：llm_config 存在扁平字段（endpoint/api_key/model）但缺少 shared
+                    // 旧格式反序列化会因 #[serde(default)] 静默成功，但旧字段值被丢弃
+                    let is_legacy_format = v
+                        .get("llm_config")
+                        .and_then(|c| c.get("shared"))
+                        .is_none()
+                        && (v.get("llm_config")
+                            .and_then(|c| c.get("endpoint"))
+                            .is_some()
+                            || v.get("llm_config")
+                                .and_then(|c| c.get("api_key"))
+                                .is_some()
+                            || v.get("llm_config")
+                                .and_then(|c| c.get("model"))
+                                .is_some());
+
+                    if is_legacy_format {
+                        tracing::info!(
+                            "检测到旧格式 LLM 配置，委托给 load_with_migration 执行迁移"
+                        );
+                        return Self::load_with_migration();
+                    }
+
                     tracing::info!("配置加载成功");
                     Ok((config, false))
                 }
@@ -1516,30 +1546,72 @@ impl AppConfig {
                     tracing::warn!("直接解析配置失败，尝试手动迁移: {}", e);
                     let mut cfg = AppConfig::new();
 
-                    // 尝试从原始 JSON 提取未变更的字段
-                    if let Some(llm_config) = v.get("llm_config") {
-                        if let Ok(llm) = serde_json::from_value(llm_config.clone()) {
-                            tracing::info!("成功恢复 llm_config");
-                            cfg.llm_config = llm;
-                        }
+                    // 尝试从原始 JSON 提取所有已知字段，避免用户配置静默丢失
+                    if let Some(v) = v.get("dashscope_api_key") {
+                        if let Ok(val) = serde_json::from_value(v.clone()) { cfg.dashscope_api_key = val; }
                     }
-                    if let Some(assistant_config) = v.get("assistant_config") {
-                        if let Ok(assistant) = serde_json::from_value(assistant_config.clone()) {
-                            tracing::info!("成功恢复 assistant_config");
-                            cfg.assistant_config = assistant;
-                        }
+                    if let Some(v) = v.get("siliconflow_api_key") {
+                        if let Ok(val) = serde_json::from_value(v.clone()) { cfg.siliconflow_api_key = val; }
                     }
-                    if let Some(dictionary) = v.get("dictionary") {
-                        if let Ok(dict) = serde_json::from_value(dictionary.clone()) {
-                            tracing::info!("成功恢复 dictionary");
-                            cfg.dictionary = dict;
-                        }
+                    if let Some(v) = v.get("asr_config") {
+                        if let Ok(val) = serde_json::from_value(v.clone()) { cfg.asr_config = val; }
                     }
-                    if let Some(builtin_domains) = v.get("builtin_dictionary_domains") {
-                        if let Ok(domains) = serde_json::from_value(builtin_domains.clone()) {
-                            tracing::info!("成功恢复 builtin_dictionary_domains");
-                            cfg.builtin_dictionary_domains = domains;
-                        }
+                    if let Some(v) = v.get("use_realtime_asr") {
+                        if let Ok(val) = serde_json::from_value(v.clone()) { cfg.use_realtime_asr = val; }
+                    }
+                    if let Some(v) = v.get("enable_llm_post_process") {
+                        if let Ok(val) = serde_json::from_value(v.clone()) { cfg.enable_llm_post_process = val; }
+                    }
+                    if let Some(v) = v.get("enable_dictionary_enhancement") {
+                        if let Ok(val) = serde_json::from_value(v.clone()) { cfg.enable_dictionary_enhancement = val; }
+                    }
+                    if let Some(v) = v.get("llm_config") {
+                        if let Ok(val) = serde_json::from_value(v.clone()) { cfg.llm_config = val; }
+                    }
+                    if let Some(v) = v.get("smart_command_config") {
+                        if let Ok(val) = serde_json::from_value(v.clone()) { cfg.smart_command_config = val; }
+                    }
+                    if let Some(v) = v.get("assistant_config") {
+                        if let Ok(val) = serde_json::from_value(v.clone()) { cfg.assistant_config = val; }
+                    }
+                    if let Some(v) = v.get("learning_config") {
+                        if let Ok(val) = serde_json::from_value(v.clone()) { cfg.learning_config = val; }
+                    }
+                    if let Some(v) = v.get("tnl_config") {
+                        if let Ok(val) = serde_json::from_value(v.clone()) { cfg.tnl_config = val; }
+                    }
+                    if let Some(v) = v.get("close_action") {
+                        if let Ok(val) = serde_json::from_value(v.clone()) { cfg.close_action = val; }
+                    }
+                    if let Some(v) = v.get("dual_hotkey_config") {
+                        if let Ok(val) = serde_json::from_value(v.clone()) { cfg.dual_hotkey_config = val; }
+                    }
+                    if let Some(v) = v.get("transcription_mode") {
+                        if let Ok(val) = serde_json::from_value(v.clone()) { cfg.transcription_mode = val; }
+                    }
+                    if let Some(v) = v.get("enable_mute_other_apps") {
+                        if let Ok(val) = serde_json::from_value(v.clone()) { cfg.enable_mute_other_apps = val; }
+                    }
+                    if let Some(v) = v.get("dictionary") {
+                        if let Ok(val) = serde_json::from_value(v.clone()) { cfg.dictionary = val; }
+                    }
+                    if let Some(v) = v.get("builtin_dictionary_domains") {
+                        if let Ok(val) = serde_json::from_value(v.clone()) { cfg.builtin_dictionary_domains = val; }
+                    }
+                    if let Some(v) = v.get("theme") {
+                        if let Ok(val) = serde_json::from_value(v.clone()) { cfg.theme = val; }
+                    }
+                    if let Some(v) = v.get("custom_asr_providers") {
+                        if let Ok(val) = serde_json::from_value(v.clone()) { cfg.custom_asr_providers = val; }
+                    }
+                    if let Some(v) = v.get("enable_result_selection") {
+                        if let Ok(val) = serde_json::from_value(v.clone()) { cfg.enable_result_selection = val; }
+                    }
+                    if let Some(v) = v.get("selected_result_preset_ids") {
+                        if let Ok(val) = serde_json::from_value(v.clone()) { cfg.selected_result_preset_ids = val; }
+                    }
+                    if let Some(v) = v.get("enable_live_transcript") {
+                        if let Ok(val) = serde_json::from_value(v.clone()) { cfg.enable_live_transcript = val; }
                     }
 
                     cfg
@@ -1693,19 +1765,26 @@ impl AppConfig {
                 }
             }
 
-            // 迁移 5: 旧单快捷键 → 新双快捷键 (保持原有逻辑)
+            // 迁移 5: 旧单快捷键 → 新双快捷键
+            // 旧 `hotkey_config` 对应听写模式，无论用户是否已自定义 dual 的 dictation，
+            // 只要 dictation 仍是默认值，就应用旧配置。
+            // 如果 dictation 已自定义，旧配置被优雅忽略（用户不需要它了）。
             if let Some(old_hotkey) = config.hotkey_config.take() {
-                let is_default = config.dual_hotkey_config.dictation.keys
-                    == vec![HotkeyKey::ControlLeft, HotkeyKey::MetaLeft]
-                    && config.dual_hotkey_config.assistant.keys
-                        == vec![HotkeyKey::AltLeft, HotkeyKey::Space];
+                let dictation_is_default = config.dual_hotkey_config.dictation.keys
+                    == vec![HotkeyKey::ControlLeft, HotkeyKey::MetaLeft];
 
-                if is_default {
+                if dictation_is_default {
                     tracing::info!(
                         "迁移旧快捷键配置 {} 到听写模式",
                         old_hotkey.format_display()
                     );
                     config.dual_hotkey_config.dictation = old_hotkey;
+                    migrated = true;
+                } else {
+                    tracing::info!(
+                        "检测到旧快捷键配置 {}，但听写模式已自定义，跳过迁移",
+                        old_hotkey.format_display()
+                    );
                     migrated = true;
                 }
             }
@@ -1819,7 +1898,7 @@ impl AppConfig {
                         hasher.update(b"|");
                         hasher.update(api_key.as_bytes());
                         let result = hasher.finalize();
-                        format!("{:x}", result)[..12].to_string()
+                        hex::encode(result)[..12].to_string()
                     }
 
                     let polishing_id =
@@ -2004,11 +2083,22 @@ impl AppConfig {
             provider.api_key.clear();
         }
         // 清空遗留 API Key 字段（Provider Registry 模式下可能为空，但保留以防泄漏）
-        s.llm_config.shared.api_key = String::new();
-        s.llm_config.feature_override.api_key = String::new();
-        s.assistant_config.llm.api_key = String::new();
+        s.llm_config.shared.api_key = None;
+        s.llm_config.feature_override.api_key = None;
+        s.assistant_config.llm.api_key = None;
         s.smart_command_config.api_key.clear();
-        s.learning_config.feature_override.api_key = String::new();
+        s.learning_config.feature_override.api_key = None;
+        // 清空 ASR 凭据中的敏感字段
+        s.asr_config.credentials.qwen_api_key.clear();
+        s.asr_config.credentials.sensevoice_api_key.clear();
+        s.asr_config.credentials.doubao_app_id.clear();
+        s.asr_config.credentials.doubao_access_token.clear();
+        s.asr_config.credentials.doubao_ime_device_id.clear();
+        s.asr_config.credentials.doubao_ime_token.clear();
+        s.asr_config.credentials.doubao_ime_cdid.clear();
+        // 清空顶层遗留 API Key 字段（旧版迁移残留，防止泄漏到前端 DevTools）
+        s.dashscope_api_key.clear();
+        s.siliconflow_api_key.clear();
         s
     }
 

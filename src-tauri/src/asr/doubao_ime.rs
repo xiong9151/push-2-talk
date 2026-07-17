@@ -624,9 +624,7 @@ mod implementation {
     }
 
     fn rand_u64() -> u64 {
-        use std::collections::hash_map::RandomState;
-        use std::hash::{BuildHasher, Hasher};
-        RandomState::new().build_hasher().finish()
+        uuid::Uuid::new_v4().as_u64_pair().0
     }
 
     // ==================== Opus 编码器 ====================
@@ -1152,7 +1150,12 @@ mod implementation {
                 .header("Sec-WebSocket-Key", generate_websocket_key())
                 .body(())?;
 
-            let (ws_stream, _) = connect_async(request).await?;
+            let (ws_stream, _) = timeout(
+                Duration::from_secs(config.connect_timeout_secs),
+                connect_async(request),
+            )
+            .await
+            .map_err(|_| anyhow!("WebSocket 连接超时"))??;
             let (mut ws_write, mut ws_read) = ws_stream.split();
 
             let request_id = uuid::Uuid::new_v4().to_string();
@@ -1295,54 +1298,62 @@ mod implementation {
                 .send(tungstenite::Message::Binary(finish_session.encode().into()))
                 .await?;
 
-            // 等待结果
+            // 等待结果（带整体超时）
             let mut final_text = String::new();
             let mut has_final_result = false;
 
-            while let Some(msg) = ws_read.next().await {
-                let msg = msg?;
-                if let tungstenite::Message::Binary(data) = msg {
-                    let response = AsrResponse::decode(&data)?;
+            let result: Result<String> = timeout(
+                Duration::from_secs(config.recv_timeout_secs),
+                async {
+                    while let Some(msg) = ws_read.next().await {
+                        let msg = msg?;
+                        if let tungstenite::Message::Binary(data) = msg {
+                            let response = AsrResponse::decode(&data)?;
 
-                    match response.message_type.as_str() {
-                        "TaskFailed" | "SessionFailed" => {
-                            return Err(anyhow!("ASR 失败: {}", response.status_message));
-                        }
-                        "SessionFinished" => {
-                            break;
-                        }
-                        other_type => {
-                            tracing::debug!("豆包输入法 ASR (HTTP): 收到消息类型: {}", other_type);
-                            if !response.result_json.is_empty() {
-                                tracing::debug!(
-                                    "豆包输入法 ASR (HTTP): result_json = {}",
-                                    response.result_json
-                                );
-                                if let Some((candidate_text, is_final)) =
-                                    extract_text_candidate_from_result_json(&response.result_json)
-                                {
-                                    if is_final {
-                                        final_text = candidate_text;
-                                        has_final_result = true;
-                                        tracing::info!(
-                                            "豆包输入法 ASR (HTTP): ✓ 最终结果: {}",
-                                            final_text
-                                        );
-                                    } else if !has_final_result {
-                                        final_text = candidate_text;
+                            match response.message_type.as_str() {
+                                "TaskFailed" | "SessionFailed" => {
+                                    return Err(anyhow!("ASR 失败: {}", response.status_message));
+                                }
+                                "SessionFinished" => {
+                                    break;
+                                }
+                                other_type => {
+                                    tracing::debug!("豆包输入法 ASR (HTTP): 收到消息类型: {}", other_type);
+                                    if !response.result_json.is_empty() {
                                         tracing::debug!(
-                                            "豆包输入法 ASR (HTTP): 更新中间结果: {}",
-                                            final_text
+                                            "豆包输入法 ASR (HTTP): result_json = {}",
+                                            response.result_json
                                         );
+                                        if let Some((candidate_text, is_final)) =
+                                            extract_text_candidate_from_result_json(&response.result_json)
+                                        {
+                                            if is_final {
+                                                final_text = candidate_text;
+                                                has_final_result = true;
+                                                tracing::info!(
+                                                    "豆包输入法 ASR (HTTP): ✓ 最终结果: {}",
+                                                    final_text
+                                                );
+                                            } else if !has_final_result {
+                                                final_text = candidate_text;
+                                                tracing::debug!(
+                                                    "豆包输入法 ASR (HTTP): 更新中间结果: {}",
+                                                    final_text
+                                                );
+                                            }
+                                        }
                                     }
                                 }
                             }
                         }
                     }
-                }
-            }
+                    Ok::<_, anyhow::Error>(final_text)
+                },
+            )
+            .await
+            .map_err(|_| anyhow!("转录超时"))?;
 
-            Ok(final_text)
+            result
         }
     }
 

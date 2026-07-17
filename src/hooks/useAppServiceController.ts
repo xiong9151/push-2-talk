@@ -24,6 +24,7 @@ import {
 } from "../constants";
 import { isAsrConfigValid, normalizeAsrConfigWithFallback, getAsrProviderDisplayName } from "../utils";
 import { entriesToWords, parseEntry, entriesToStorageFormat } from "../utils/dictionaryUtils";
+import { sanitizeErrorMessage } from "../utils/errorParser";
 import {
   fetchBuiltinDomains,
   getBuiltinWordsForDomains,
@@ -646,7 +647,7 @@ export function useAppServiceController({
       setError(null);
       flashSuccessToast();
     } catch (err) {
-      setError(String(err));
+      setError(sanitizeErrorMessage(String(err)));
     }
   }, [
     theme,
@@ -727,7 +728,7 @@ export function useAppServiceController({
       setError(null);
       // 即时保存不显示 toast，由组件自己的状态指示器显示反馈
     } catch (err) {
-      setError(String(err));
+      setError(sanitizeErrorMessage(String(err)));
       throw err; // 重新抛出，让调用方可以处理回滚
     }
   }, [
@@ -749,7 +750,7 @@ export function useAppServiceController({
       setEnableAutostart(newValue);
       flashSuccessToast();
     } catch (err) {
-      setError(String(err));
+      setError(sanitizeErrorMessage(String(err)));
     }
   }, [enableAutostart, flashSuccessToast, setEnableAutostart, setError]);
 
@@ -798,7 +799,7 @@ export function useAppServiceController({
       await stopApp();
       setStatus("idle");
     } catch (err) {
-      setError(String(err));
+      setError(sanitizeErrorMessage(String(err)));
     }
   }, [
     asrConfig,
@@ -816,7 +817,7 @@ export function useAppServiceController({
     try {
       await invoke<string>("cancel_transcription");
     } catch (err) {
-      setError(String(err));
+      setError(sanitizeErrorMessage(String(err)));
     }
   }, [setError]);
 

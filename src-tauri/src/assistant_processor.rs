@@ -253,7 +253,7 @@ pub(crate) fn format_conversation_for_copy(turns: &[ConversationTurn]) -> String
     let output = parts.join("\n\n---\n\n");
 
     // 截断至最大长度，避免 IPC 负载过大
-    if output.len() > MAX_COPY_LENGTH {
+    if output.chars().count() > MAX_COPY_LENGTH {
         let truncated: String = output.chars().take(MAX_COPY_LENGTH).collect();
         tracing::warn!(
             "format_conversation_for_copy: 输出长度 {} 超过上限 {}，已截断",

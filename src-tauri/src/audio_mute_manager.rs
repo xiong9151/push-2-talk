@@ -21,14 +21,45 @@ use windows::Win32::System::Com::{
 
 /// RAII Guard for COM initialization
 /// 确保 CoUninitialize 在作用域结束时被调用
+/// 仅在 CoInitializeEx 返回 S_OK 时才调用 CoUninitialize
 #[cfg(target_os = "windows")]
-struct ComGuard;
+struct ComGuard {
+    should_uninit: bool,
+}
+
+#[cfg(target_os = "windows")]
+impl ComGuard {
+    /// 初始化 COM（多线程模式）
+    ///
+    /// # 错误处理
+    /// - 如果 COM 已在此线程初始化（返回 S_FALSE 或 RPC_E_CHANGED_MODE），
+    ///   不调用 CoUninitialize，避免破坏线程的 COM 引用计数
+    fn new() -> Self {
+        let hr = unsafe { CoInitializeEx(None, COINIT_MULTITHREADED) };
+
+        // S_OK (0x00000000): COM 由本调用成功初始化，需要调用 CoUninitialize
+        // S_FALSE (0x00000001): COM 已在此线程初始化，不增长引用计数，不应调用 CoUninitialize
+        // RPC_E_CHANGED_MODE (0x80010106): COM 已初始化但模式不匹配，不应调用 CoUninitialize
+        if hr.0 == 0 {
+            return Self {
+                should_uninit: true,
+            };
+        }
+
+        // 其他情况：COM 已初始化，不应调用 CoUninitialize
+        Self {
+            should_uninit: false,
+        }
+    }
+}
 
 #[cfg(target_os = "windows")]
 impl Drop for ComGuard {
     fn drop(&mut self) {
-        unsafe {
-            CoUninitialize();
+        if self.should_uninit {
+            unsafe {
+                CoUninitialize();
+            }
         }
     }
 }
@@ -253,11 +284,8 @@ impl AudioMuteManager {
 
         unsafe {
             // 初始化 COM，使用 Multithreaded 模式以适应 Tauri 线程池
-            // 注意：CoInitializeEx 是幂等的，重复调用不会出错
-            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-
-            // 使用 RAII 确保 CoUninitialize 被调用
-            let _com_guard = ComGuard;
+            // ComGuard::new() 仅在 S_OK 时调用 CoUninitialize，避免破坏线程 COM 引用计数
+            let _com_guard = ComGuard::new();
 
             // 获取设备枚举器
             let enumerator: IMMDeviceEnumerator =
@@ -367,22 +395,37 @@ impl AudioMuteManager {
         active_sessions: &Arc<AtomicU32>,
         _own_process_id: u32,
     ) -> Result<usize, String> {
-        // 获取快照，放入 pending_pids 用于跟踪僵尸进程
-        let mut pending_pids: HashSet<u32> = {
+        // 先快速检查是否有需要恢复的应用（避免不必要的 COM 初始化）
+        let has_pending = {
             let muted_map = muted_pids.lock().unwrap_or_else(|e| e.into_inner());
-            muted_map.iter().cloned().collect()
+            !muted_map.is_empty()
         };
 
-        if pending_pids.is_empty() {
+        if !has_pending {
             tracing::debug!("No muted applications to restore");
             return Ok(0);
         }
 
-        tracing::debug!("Restoring {} muted applications", pending_pids.len());
-
         unsafe {
-            let _ = CoInitializeEx(None, COINIT_MULTITHREADED);
-            let _com_guard = ComGuard;
+            // COM 初始化必须在锁定 muted_pids 之前完成，确保锁顺序一致：
+            //   mute_other_apps:      COM init → muted_pids lock
+            //   restore_volumes_internal: COM init → muted_pids lock  ← 保持一致
+            // 避免死锁：一个线程持有 muted_pids 锁并等待 COM 初始化，
+            // 另一个线程完成了 COM 初始化并等待 muted_pids 锁。
+            let _com_guard = ComGuard::new();
+
+            // 获取快照，放入 pending_pids 用于跟踪僵尸进程
+            let mut pending_pids: HashSet<u32> = {
+                let muted_map = muted_pids.lock().unwrap_or_else(|e| e.into_inner());
+                muted_map.iter().cloned().collect()
+            };
+
+            if pending_pids.is_empty() {
+                tracing::debug!("No muted applications to restore");
+                return Ok(0);
+            }
+
+            tracing::debug!("Restoring {} muted applications", pending_pids.len());
 
             let enumerator: IMMDeviceEnumerator =
                 CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
@@ -480,8 +523,13 @@ impl Drop for AudioMuteManager {
 
         // 等待看门狗线程结束（最多等待2秒）
         if let Some(handle) = self.watchdog_handle.take() {
-            // 使用 thread::spawn 包装 join 以实现超时
-            let _ = handle.join();
+            // 将 join 放入独立线程，避免当前线程无限阻塞
+            // 看门狗线程在 stop_flag 置位后会在下一次循环退出，无需阻塞等待
+            thread::spawn(move || {
+                if let Err(e) = handle.join() {
+                    tracing::warn!("Watchdog thread panicked: {:?}", e);
+                }
+            });
         }
 
         tracing::debug!("AudioMuteManager dropped");

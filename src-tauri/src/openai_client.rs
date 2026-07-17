@@ -9,6 +9,7 @@ use anyhow::Result;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::fmt;
 use std::time::Duration;
 
 // ============================================================================
@@ -117,7 +118,7 @@ impl ChatOptions {
 // ============================================================================
 
 /// OpenAI 兼容 API 客户端配置
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize)]
 pub struct OpenAiClientConfig {
     /// API 端点 (如 https://api.openai.com/v1/chat/completions)
     pub endpoint: String,
@@ -134,6 +135,30 @@ pub struct OpenAiClientConfig {
     /// 自定义请求体 JSON（附加到请求体中的额外字段）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extra_body: Option<String>,
+}
+
+/// 对 API Key 进行脱敏处理，仅保留前几个字符和长度提示
+fn mask_api_key(key: &str) -> String {
+    if key.len() <= 6 {
+        // 极短的 key，全部掩码
+        "***".to_string()
+    } else {
+        let prefix = &key[..4];
+        format!("{}... (len={})", prefix, key.len())
+    }
+}
+
+impl fmt::Debug for OpenAiClientConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OpenAiClientConfig")
+            .field("endpoint", &self.endpoint)
+            .field("api_key", &mask_api_key(&self.api_key))
+            .field("model", &self.model)
+            .field("timeout_secs", &self.timeout_secs)
+            .field("reasoning_effort", &self.reasoning_effort)
+            .field("extra_body", &self.extra_body)
+            .finish()
+    }
 }
 
 impl OpenAiClientConfig {
@@ -319,7 +344,7 @@ impl OpenAiClient {
             anyhow::anyhow!(
                 "OpenAI API 返回非 JSON 响应: {} (前100字符: {})",
                 e,
-                &body[..body.len().min(100)]
+                body.chars().take(100).collect::<String>()
             )
         })?;
 
