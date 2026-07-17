@@ -120,6 +120,38 @@ export function RightPanel({
     });
   };
 
+  const handleToggleResultSelection = async (enabled: boolean) => {
+    // 打开多结果选择时，默认选中所有预设
+    if (enabled) {
+      const updatedPresets = llmConfig.presets.map((p) => ({
+        ...p,
+        selected_for_display: true,
+      }));
+      setLlmConfig((prev) => ({
+        ...prev,
+        presets: updatedPresets,
+      }));
+      await saveImmediately({
+        llmConfig: { ...llmConfig, presets: updatedPresets },
+        enableResultSelection: true,
+      });
+    } else {
+      // 关闭多结果选择时，取消所有预设的勾选
+      const updatedPresets = llmConfig.presets.map((p) => ({
+        ...p,
+        selected_for_display: false,
+      }));
+      setLlmConfig((prev) => ({
+        ...prev,
+        presets: updatedPresets,
+      }));
+      await saveImmediately({
+        llmConfig: { ...llmConfig, presets: updatedPresets },
+        enableResultSelection: false,
+      });
+    }
+  };
+
   const handleSinglePresetAndSave = async (id: string) => {
     handleSinglePresetChange(id);
     await saveImmediately({
@@ -212,41 +244,66 @@ export function RightPanel({
               variant="orange"
             />
           </div>
-          {enablePostProcess && resultSelectionEnabled ? (
-            /* 多选模式：每个预设带复选框 */
-            <div className="space-y-1">
-              {llmConfig.presets.map((p) => (
-                <label
-                  key={p.id}
-                  className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-[var(--panel)] cursor-pointer transition-colors"
+          {enablePostProcess && (
+            /* 多结果选择区域，始终显示开关 */
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-bold text-stone-500">
+                  多结果选择
+                </span>
+                <button
+                  onClick={() => void handleToggleResultSelection(!resultSelectionEnabled)}
+                  className={[
+                    "relative w-9 h-5 rounded-full transition-colors shrink-0",
+                    resultSelectionEnabled ? "bg-[var(--sage)]" : "bg-stone-300",
+                  ].join(" ")}
                 >
-                  <input
-                    type="checkbox"
-                    checked={p.selected_for_display ?? false}
-                    disabled={isRunning}
-                    onChange={() => void handleTogglePresetAndSave(p.id)}
-                    className="rounded border-stone-300 text-[var(--steel)] focus:ring-[var(--steel)] disabled:opacity-50"
+                  <div
+                    className={[
+                      "absolute top-0.5 w-4 h-4 rounded-full bg-white shadow-sm transition-transform",
+                      resultSelectionEnabled ? "translate-x-[18px]" : "translate-x-0.5",
+                    ].join(" ")}
                   />
-                  <span className="text-[10px] font-medium text-stone-600">{p.name}</span>
-                </label>
-              ))}
+                </button>
+              </div>
+
+              {resultSelectionEnabled ? (
+                /* 多选模式：每个预设带复选框 */
+                <div className="space-y-1">
+                  {llmConfig.presets.map((p) => (
+                    <label
+                      key={p.id}
+                      className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-[var(--panel)] cursor-pointer transition-colors"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={p.selected_for_display ?? false}
+                        disabled={isRunning}
+                        onChange={() => void handleTogglePresetAndSave(p.id)}
+                        className="rounded border-stone-300 text-[var(--steel)] focus:ring-[var(--steel)] disabled:opacity-50"
+                      />
+                      <span className="text-[10px] font-medium text-stone-600">{p.name}</span>
+                    </label>
+                  ))}
+                </div>
+              ) : (
+                /* 单选模式：传统下拉 */
+                <select
+                  value={llmConfig.active_preset_id}
+                  onChange={(e) => {
+                    void handleSinglePresetAndSave(e.target.value);
+                  }}
+                  disabled={!enablePostProcess || isRunning}
+                  className="w-full text-[10px] font-bold text-stone-500 bg-[var(--paper)] rounded-lg px-2 py-2 outline-none border border-[var(--stone)] disabled:opacity-50"
+                >
+                  {llmConfig.presets.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                    </option>
+                  ))}
+                </select>
+              )}
             </div>
-          ) : (
-            /* 单选模式：传统下拉 */
-            <select
-              value={llmConfig.active_preset_id}
-              onChange={(e) => {
-                void handleSinglePresetAndSave(e.target.value);
-              }}
-              disabled={!enablePostProcess || isRunning}
-              className="w-full text-[10px] font-bold text-stone-500 bg-[var(--paper)] rounded-lg px-2 py-2 outline-none border border-[var(--stone)] disabled:opacity-50"
-            >
-              {llmConfig.presets.map((p) => (
-                <option key={p.id} value={p.id}>
-                  {p.name}
-                </option>
-              ))}
-            </select>
           )}
           {/* 虚线分割线 */}
           <div className="my-3 border-t border-dashed border-stone-200" />
