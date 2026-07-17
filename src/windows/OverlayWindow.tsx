@@ -39,13 +39,22 @@ const useSmoothAudioLevel = (isRecording: boolean): AudioVisualizationState => {
 
   useEffect(() => {
     let unlisten: UnlistenFn | undefined;
+    let cancelled = false;
     const setup = async () => {
-      unlisten = await listen<AudioLevelPayload>("audio_level_update", (event) => {
+      const u = await listen<AudioLevelPayload>("audio_level_update", (event) => {
         targetRef.current = Math.min(Math.pow(event.payload.level, 0.45), 1.0);
       });
+      if (cancelled) {
+        u();
+      } else {
+        unlisten = u;
+      }
     };
     setup();
-    return () => { if (unlisten) unlisten(); };
+    return () => {
+      cancelled = true;
+      if (unlisten) unlisten();
+    };
   }, []);
 
   useEffect(() => {
@@ -262,6 +271,7 @@ export default function OverlayWindow() {
   const [status, setStatus] = useState<OverlayStatus>("recording");
   const [isLocked, setIsLocked] = useState(false);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const submitDebounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [theme, setTheme] = useState("light");
   const [resultItems, setResultItems] = useState<TranscriptionResultItem[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
@@ -465,6 +475,11 @@ export default function OverlayWindow() {
   const handleFinish = async () => {
     if (isSubmitting) return;
     setIsSubmitting(true);
+    // 300ms debounce: prevent rapid duplicate clicks
+    if (submitDebounceRef.current) clearTimeout(submitDebounceRef.current);
+    submitDebounceRef.current = setTimeout(() => {
+      submitDebounceRef.current = null;
+    }, 300);
     try {
       await invoke("finish_locked_recording");
     } catch (e) {
@@ -476,6 +491,11 @@ export default function OverlayWindow() {
   const handleCancel = async () => {
     if (isSubmitting) return;
     setIsSubmitting(true);
+    // 300ms debounce: prevent rapid duplicate clicks
+    if (submitDebounceRef.current) clearTimeout(submitDebounceRef.current);
+    submitDebounceRef.current = setTimeout(() => {
+      submitDebounceRef.current = null;
+    }, 300);
     try {
       await invoke("cancel_locked_recording");
     } catch (e) {
@@ -484,8 +504,20 @@ export default function OverlayWindow() {
     }
   };
 
+  // Cleanup debounce timer on unmount
+  useEffect(() => {
+    return () => {
+      if (submitDebounceRef.current) {
+        clearTimeout(submitDebounceRef.current);
+      }
+    };
+  }, []);
+
   return (
-    <div className={`overlay-root ${theme === "dark" ? "theme-dark" : "theme-light"}`}>
+    <div
+      className={`overlay-root ${theme === "dark" ? "theme-dark" : "theme-light"}`}
+      style={status === "transcribing" ? { pointerEvents: 'none' } : undefined}
+    >
       {status === "results" ? (
         <div className={`overlay-pill overlay-pill-results`}>
           <ResultList

@@ -18,6 +18,7 @@ use crate::win32_input;
 pub struct ClipboardGuard {
     original_content: Option<String>,
     clipboard: Clipboard,
+    restored: bool,
 }
 
 impl ClipboardGuard {
@@ -31,6 +32,7 @@ impl ClipboardGuard {
         Ok(Self {
             original_content,
             clipboard,
+            restored: false,
         })
     }
 
@@ -38,6 +40,7 @@ impl ClipboardGuard {
     pub fn restore(mut self) -> Result<()> {
         if let Some(ref content) = self.original_content {
             self.clipboard.set_text(content.clone())?;
+            self.restored = true;
             tracing::debug!("ClipboardGuard: 已手动恢复剪贴板");
         }
         Ok(())
@@ -46,6 +49,9 @@ impl ClipboardGuard {
 
 impl Drop for ClipboardGuard {
     fn drop(&mut self) {
+        if self.restored {
+            return;
+        }
         if let Some(ref content) = self.original_content {
             // 最大努力恢复，忽略错误
             let _ = self.clipboard.set_text(content.clone());
@@ -140,6 +146,8 @@ fn wait_for_clipboard_update(
             Err(e) => {
                 if attempt == 0 {
                     tracing::warn!("clipboard_manager: 读取剪贴板失败: {}", e);
+                } else {
+                    tracing::debug!("clipboard_manager: 读取剪贴板失败 (尝试 {}): {}", attempt, e);
                 }
             }
         }

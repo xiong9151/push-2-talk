@@ -194,7 +194,7 @@ pub async fn fetch_remote_hotwords() -> Result<(String, String)> {
             Ok(response) => response,
             Err(err) => {
                 tracing::warn!("内置词库拉取失败 {}: {}", endpoint, err);
-                last_error = err.to_string();
+                last_error = format!("[{}] 网络错误: {}", endpoint, err);
                 continue;
             }
         };
@@ -202,7 +202,7 @@ pub async fn fetch_remote_hotwords() -> Result<(String, String)> {
         if !response.status().is_success() {
             let status = response.status();
             tracing::warn!("内置词库拉取失败 {}: HTTP {}", endpoint, status);
-            last_error = format!("HTTP {}", status);
+            last_error = format!("[{}] HTTP {}", endpoint, status);
             continue;
         }
 
@@ -210,14 +210,14 @@ pub async fn fetch_remote_hotwords() -> Result<(String, String)> {
             Ok(text) => text,
             Err(err) => {
                 tracing::warn!("内置词库读取响应失败 {}: {}", endpoint, err);
-                last_error = err.to_string();
+                last_error = format!("[{}] 响应读取失败: {}", endpoint, err);
                 continue;
             }
         };
 
         if let Err(err) = validate_hotwords(&text) {
             tracing::warn!("内置词库校验失败 {}: {}", endpoint, err);
-            last_error = err.to_string();
+            last_error = format!("[{}] 校验失败: {}", endpoint, err);
             continue;
         }
 

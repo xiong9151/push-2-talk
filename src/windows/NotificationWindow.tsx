@@ -39,12 +39,14 @@ export default function NotificationWindow() {
   // 监听学习建议事件
   useEffect(() => {
     let unlisten: (() => void) | undefined;
+    let cancelled = false;
 
     const setupListener = async () => {
       try {
-        unlisten = await listen<VocabularyLearningSuggestion>(
+        const u = await listen<VocabularyLearningSuggestion>(
           "vocabulary_learning_suggestion",
           async (event) => {
+            if (cancelled) return;
             console.log("收到词库学习建议:", event.payload);
             addSuggestion(event.payload);
 
@@ -56,6 +58,11 @@ export default function NotificationWindow() {
             }
           }
         );
+        if (cancelled) {
+          u();
+        } else {
+          unlisten = u;
+        }
       } catch (error) {
         console.error("设置事件监听器失败:", error);
       }
@@ -64,6 +71,7 @@ export default function NotificationWindow() {
     setupListener();
 
     return () => {
+      cancelled = true;
       if (unlisten) {
         unlisten();
       }

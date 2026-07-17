@@ -231,7 +231,27 @@ impl DoubaoRealtimeClient {
             let mut accumulated_text = String::new();
             let mut result_sent = false;
 
-            while let Some(msg) = read.next().await {
+            loop {
+                let msg = match timeout(Duration::from_secs(30), read.next()).await {
+                    Ok(Some(msg)) => msg,
+                    Ok(None) => break, // 流已关闭
+                    Err(_) => {
+                        tracing::warn!("豆包 WebSocket 接收超时（30秒无事件），断开连接");
+                        if !result_sent {
+                            if !accumulated_text.is_empty() {
+                                tracing::info!("豆包超时，返回累积文本: {}", accumulated_text);
+                                let _ = result_tx.send(Ok(accumulated_text.clone())).await;
+                            } else {
+                                let _ = result_tx
+                                    .send(Err(anyhow::anyhow!("WebSocket 接收超时")))
+                                    .await;
+                            }
+                            result_sent = true;
+                        }
+                        break;
+                    }
+                };
+
                 match msg {
                     Ok(Message::Binary(data)) => {
                         tracing::debug!("豆包 WebSocket 收到二进制消息: {} bytes", data.len());

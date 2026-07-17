@@ -4,7 +4,11 @@
 use anyhow::Result;
 use cpal::Stream;
 use crossbeam_channel::{bounded, Receiver, Sender};
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+};
+use std::time::Duration;
 use tauri::AppHandle;
 
 use crate::audio_utils::{
@@ -27,6 +31,8 @@ pub struct StreamingRecorder {
     chunk_sender: Option<Sender<Vec<i16>>>,
     // 累积的完整音频数据（用于备用方案）
     full_audio_data: Arc<Mutex<Vec<f32>>>,
+    // 回调端数据写入完成信号，防止 stop_streaming 与回调的 race
+    data_written: Arc<AtomicBool>,
 }
 
 impl StreamingRecorder {
@@ -38,6 +44,7 @@ impl StreamingRecorder {
             stream: None,
             chunk_sender: None,
             full_audio_data: Arc::new(Mutex::new(Vec::new())),
+            data_written: Arc::new(AtomicBool::new(false)),
         })
     }
 
@@ -134,6 +141,7 @@ impl StreamingRecorder {
 
         let is_recording = Arc::clone(&self.is_recording);
         let full_audio_data = Arc::clone(&self.full_audio_data);
+        let data_written = Arc::clone(&self.data_written);
         let device_sample_rate = self.device_sample_rate;
         let channels = self.channels;
 
@@ -172,6 +180,7 @@ impl StreamingRecorder {
 
                     // 保存原始数据用于备用方案
                     full_audio_data.lock().unwrap_or_else(|e| e.into_inner()).extend_from_slice(data);
+                    data_written.store(true, Ordering::Release);
 
                     // 处理数据：转单声道 + 降采样
                     let mono = Self::to_mono(data, channels);
@@ -238,6 +247,7 @@ impl StreamingRecorder {
             cpal::SampleFormat::I16 => {
                 let is_recording_i16 = Arc::clone(&is_recording);
                 let full_audio_data_i16 = Arc::clone(&full_audio_data);
+                let data_written_i16 = Arc::clone(&data_written);
                 let pending_samples_i16 = Arc::clone(&pending_samples);
                 let chunk_tx_i16 = chunk_tx.clone();
                 let last_emit_time_i16 = Arc::clone(&last_emit_time);
@@ -258,6 +268,7 @@ impl StreamingRecorder {
 
                         // 保存原始数据
                         full_audio_data_i16.lock().unwrap_or_else(|e| e.into_inner()).extend(&f32_data);
+                        data_written_i16.store(true, Ordering::Release);
 
                         // 处理数据
                         let mono = Self::to_mono(&f32_data, channels);
@@ -318,6 +329,7 @@ impl StreamingRecorder {
             cpal::SampleFormat::U16 => {
                 let is_recording_u16 = Arc::clone(&is_recording);
                 let full_audio_data_u16 = Arc::clone(&full_audio_data);
+                let data_written_u16 = Arc::clone(&data_written);
                 let pending_samples_u16 = Arc::clone(&pending_samples);
                 let chunk_tx_u16 = chunk_tx.clone();
                 let last_emit_time_u16 = Arc::clone(&last_emit_time);
@@ -340,6 +352,7 @@ impl StreamingRecorder {
 
                         // 保存原始数据
                         full_audio_data_u16.lock().unwrap_or_else(|e| e.into_inner()).extend(&f32_data);
+                        data_written_u16.store(true, Ordering::Release);
 
                         // 处理数据
                         let mono = Self::to_mono(&f32_data, channels);
@@ -417,9 +430,26 @@ impl StreamingRecorder {
         // 通知音频回调停止（回调在独立音频线程，需先让回调感知）
         *self.is_recording.lock().unwrap_or_else(|e| e.into_inner()) = false;
 
-        // 等待音频线程完成最后一次数据写入（不依赖固定 sleep）
-        // 回调周期 ~0.2s，500ms 远超最坏情况
-        std::thread::sleep(std::time::Duration::from_millis(500));
+        // 等待音频线程完成最后一次数据写入（轮询 data_written 信号，带超时）
+        let data_written = Arc::clone(&self.data_written);
+        let start = std::time::Instant::now();
+        let timeout = std::time::Duration::from_millis(1000);
+        let poll_interval = std::time::Duration::from_millis(20);
+
+        // 先等待一段固定短时间，让音频回调感知 is_recording=false
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        // 然后轮询 data_written，直到回调完成写入或超时
+        loop {
+            if data_written.load(Ordering::Acquire) {
+                break;
+            }
+            if start.elapsed() >= timeout {
+                tracing::warn!("等待音频回调数据写入超时，继续停止流程");
+                break;
+            }
+            std::thread::sleep(poll_interval);
+        }
 
         // 最后 drop stream
         self.stream = None;

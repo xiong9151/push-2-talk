@@ -225,6 +225,12 @@ impl TnlEngine {
         // 6. 音标词库替换（英文复合词匹配）
         let (replaced_text, phonetic_replacements) = self.apply_phonetic_replacement(&hyphen_text);
 
+        // 注意：此顺序是精心设计的，后续步骤不会撤销前面步骤的工作：
+        // - letter_merge → symbol: 先合并字母，再映射口语符号，互不冲突
+        // - symbol → pinyin: 符号映射把中文词替换为 ASCII 符号，pinyin 只处理剩余中文 token，互不冲突
+        // - pinyin → hyphen: pinyin 替换中文词(中文→中文)，hyphen 只处理 ASCII 连字符词，互不冲突
+        // - hyphen → phonetic: hyphen 产生连字符词，phonetic 先查精确匹配再试音近，不会覆盖已有替换
+
         // 合并替换记录
         let mut applied = letter_merge_replacements;
         applied.extend(symbol_replacements);
@@ -240,7 +246,7 @@ impl TnlEngine {
         let next_candidate_index = diagnostic_candidates.len();
         diagnostic_candidates.extend(self.collect_phonetic_diagnostic_candidates(
             &replaced_text,
-            &applied,
+            &phonetic_replacements,
             next_candidate_index,
         ));
         let diagnostics = TnlDiagnostics::from_candidates(diagnostic_candidates);

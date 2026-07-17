@@ -259,7 +259,7 @@ impl OpenAiClient {
             }
         }
 
-        // 打印完整请求信息用于调试
+        // 打印完整请求信息用于调试（消息内容已脱敏）
         tracing::info!(
             "[DEBUG] OpenAI 请求: endpoint={}, model={}, api_key_len={}, max_tokens={}, temperature={}",
             self.config.endpoint,
@@ -268,9 +268,29 @@ impl OpenAiClient {
             options.max_tokens,
             options.temperature
         );
+        // 记录请求体元数据，但脱敏消息内容，避免用户文本和 API Key 泄露到日志
+        let message_count = request_body["messages"].as_array().map(|a| a.len()).unwrap_or(0);
+        let total_chars: usize = request_body["messages"]
+            .as_array()
+            .map(|msgs| {
+                msgs.iter()
+                    .filter_map(|m| m["content"].as_str())
+                    .map(|c| c.len())
+                    .sum()
+            })
+            .unwrap_or(0);
         tracing::info!(
-            "[DEBUG] 请求体: {}",
-            serde_json::to_string_pretty(&request_body).unwrap_or_default()
+            "[DEBUG] 请求体: {} 条消息, {} 字符 (内容已脱敏), model={}, extra_fields={}",
+            message_count,
+            total_chars,
+            self.config.model,
+            {
+                let keys: Vec<&str> = request_body
+                    .as_object()
+                    .map(|obj| obj.keys().filter(|k| *k != "messages" && *k != "model").map(|s| s.as_str()).collect())
+                    .unwrap_or_default();
+                keys.join(", ")
+            }
         );
 
         let response = self
@@ -284,8 +304,11 @@ impl OpenAiClient {
 
         let status = response.status();
         if !status.is_success() {
-            let text = response.text().await.unwrap_or_default();
-            anyhow::bail!("OpenAI API 请求失败 ({}): {}", status, text);
+            let body = response.text().await.unwrap_or_else(|e| {
+                tracing::warn!("Failed to read error response body: {}", e);
+                String::new()
+            });
+            anyhow::bail!("OpenAI API 请求失败 ({}): {}", status, body);
         }
 
         let body = response.text().await?;

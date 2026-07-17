@@ -155,6 +155,37 @@ struct AppState {
     target_window_for_insert: Arc<Mutex<Option<isize>>>,
 }
 
+// ================== RAII Guards ==================
+
+/// RAII guard that resets is_processing_stop to false on drop (even on panic).
+/// Prevents the flag from being permanently stuck if an async block panics.
+struct ProcessingStopGuard<'a> {
+    flag: &'a AtomicBool,
+}
+
+impl Drop for ProcessingStopGuard<'_> {
+    fn drop(&mut self) {
+        self.flag.store(false, Ordering::SeqCst);
+    }
+}
+
+/// RAII guard that returns a TextInserter into its Arc<Mutex<Option>> on drop (even on panic).
+/// Prevents the inserter from being permanently lost if code between take() and reassignment panics.
+struct TextInserterGuard<'a> {
+    inserter: Option<TextInserter>,
+    target: &'a Arc<Mutex<Option<TextInserter>>>,
+}
+
+impl Drop for TextInserterGuard<'_> {
+    fn drop(&mut self) {
+        if let Some(ins) = self.inserter.take() {
+            if let Ok(mut guard) = self.target.lock() {
+                *guard = Some(ins);
+            }
+        }
+    }
+}
+
 // ================== 多轮对话数据结构 ==================
 
 /// 对话提示词模式（首轮锁定，追问不变）
@@ -306,7 +337,7 @@ fn sync_tray_menu_from_config(app_handle: &AppHandle, config: &AppConfig) {
 }
 
 fn load_persisted_config() -> Result<AppConfig, String> {
-    match AppConfig::load() {
+    match AppConfig::load_with_migration() {
         Ok((config, migrated)) => {
             if migrated {
                 config
@@ -352,7 +383,9 @@ where
 
 fn emit_config_updated(app: &AppHandle, config: &AppConfig) {
     sync_tray_menu_from_config(app, config);
-    let _ = app.emit("config_updated", config);
+    // Bug 3: 发送清除了API Key的安全副本到前端
+    let sanitized = config.sanitized_for_frontend();
+    let _ = app.emit("config_updated", sanitized);
 }
 
 fn hotwords_content_changed(current: &str, next: &str) -> bool {
@@ -442,11 +475,10 @@ fn start_builtin_dictionary_updater(
     let builtin_hotwords_raw = Arc::clone(builtin_hotwords_raw);
     tauri::async_runtime::spawn(async move {
         let updater_loop = async {
-            refresh_builtin_dictionary_once(&app_handle, &builtin_hotwords_raw).await;
-
             let mut interval = tokio::time::interval(std::time::Duration::from_secs(
                 BUILTIN_DICTIONARY_UPDATE_INTERVAL_SECS,
             ));
+            // Skip the first immediate tick (tokio::time::interval's first tick returns instantly)
             interval.tick().await;
             loop {
                 interval.tick().await;
@@ -1114,6 +1146,22 @@ async fn handle_recording_start(
                 )
                 .await;
             }
+            Some(config::AsrProvider::Custom) => {
+                // Custom ASR provider does not support realtime mode; fall through to HTTP mode
+                tracing::warn!("自定义 ASR 提供商不支持实时模式，回退到 HTTP 模式");
+                let mut recorder_guard = recorder.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(ref mut rec) = *recorder_guard {
+                    if rec.is_recording() {
+                        tracing::warn!("发现正在进行的录音，先停止它");
+                        let _ = rec.stop_recording_to_memory();
+                    }
+                    if let Err(e) = rec.start_recording(Some(app.clone())) {
+                        emit_error_and_hide_overlay(&app, format!("录音失败: {}", e)).await;
+                    }
+                } else {
+                    emit_error_and_hide_overlay(&app, "录音器未初始化".to_string()).await;
+                }
+            }
             _ => {
                 handle_qwen_realtime_start(
                     app,
@@ -1136,10 +1184,10 @@ async fn handle_recording_start(
                 let _ = rec.stop_recording_to_memory();
             }
             if let Err(e) = rec.start_recording(Some(app.clone())) {
-                emit_error_and_hide_overlay(&app, format!("录音失败: {}", e));
+                emit_error_and_hide_overlay(&app, format!("录音失败: {}", e)).await;
             }
         } else {
-            emit_error_and_hide_overlay(&app, "录音器未初始化".to_string());
+            emit_error_and_hide_overlay(&app, "录音器未初始化".to_string()).await;
         }
     }
 }
@@ -1168,12 +1216,12 @@ async fn handle_doubao_realtime_start(
             match rec.start_streaming(Some(app.clone())) {
                 Ok(rx) => Some(rx),
                 Err(e) => {
-                    emit_error_and_hide_overlay(&app, format!("录音失败: {}", e));
+                    emit_error_and_hide_overlay(&app, format!("录音失败: {}", e)).await;
                     None
                 }
             }
         } else {
-            emit_error_and_hide_overlay(&app, "流式录音器未初始化".to_string());
+            emit_error_and_hide_overlay(&app, "流式录音器未初始化".to_string()).await;
             None
         }
     };
@@ -1268,12 +1316,12 @@ async fn handle_doubao_ime_realtime_start(
             match rec.start_streaming(Some(app.clone())) {
                 Ok(rx) => Some(rx),
                 Err(e) => {
-                    emit_error_and_hide_overlay(&app, format!("录音失败: {}", e));
+                    emit_error_and_hide_overlay(&app, format!("录音失败: {}", e)).await;
                     None
                 }
             }
         } else {
-            emit_error_and_hide_overlay(&app, "流式录音器未初始化".to_string());
+            emit_error_and_hide_overlay(&app, "流式录音器未初始化".to_string()).await;
             None
         }
     };
@@ -1501,12 +1549,12 @@ async fn handle_qwen_realtime_start(
                     match rec.start_streaming(Some(app.clone())) {
                         Ok(rx) => Some(rx),
                         Err(e) => {
-                            emit_error_and_hide_overlay(&app, format!("录音失败: {}", e));
+                            emit_error_and_hide_overlay(&app, format!("录音失败: {}", e)).await;
                             None
                         }
                     }
                 } else {
-                    emit_error_and_hide_overlay(&app, "流式录音器未初始化".to_string());
+                    emit_error_and_hide_overlay(&app, "流式录音器未初始化".to_string()).await;
                     None
                 }
             };
@@ -1540,6 +1588,10 @@ async fn handle_qwen_realtime_start(
                 });
 
                 *audio_sender_handle.lock().unwrap_or_else(|e| e.into_inner()) = Some(sender_handle);
+            } else {
+                // 会话已创建但录音启动失败，关闭 WebSocket 会话防止泄漏
+                tracing::warn!("千问录音启动失败，关闭已创建的 WebSocket 会话");
+                let _ = session.close().await;
             }
         }
         Err(e) => {
@@ -1553,10 +1605,10 @@ async fn handle_qwen_realtime_start(
                     let _ = rec.stop_streaming();
                 }
                 if let Err(e) = rec.start_streaming(Some(app.clone())) {
-                    emit_error_and_hide_overlay(&app, format!("录音失败: {}", e));
+                    emit_error_and_hide_overlay(&app, format!("录音失败: {}", e)).await;
                 }
             } else {
-                emit_error_and_hide_overlay(&app, "录音器未初始化".to_string());
+                emit_error_and_hide_overlay(&app, "录音器未初始化".to_string()).await;
             }
         }
     }
@@ -2343,9 +2395,9 @@ async fn handle_assistant_mode(
                     Err(e) => {
                         if is_audio_skip_error(&e) {
                             tracing::info!("音频已跳过: {}", e);
-                            hide_overlay_silently(&app);
+                            hide_overlay_silently(&app).await;
                         } else {
-                            emit_error_and_hide_overlay(&app, format!("停止录音失败: {}", e));
+                            emit_error_and_hide_overlay(&app, format!("停止录音失败: {}", e)).await;
                         }
                         None
                     }
@@ -2392,7 +2444,7 @@ async fn handle_assistant_mode(
     // 2. 如果实时模式失败且有音频数据，尝试 HTTP 备用
     let final_result = if asr_result.is_err() && audio_data.is_some() {
         tracing::warn!("实时 ASR 失败，尝试 HTTP 备用");
-        let data = audio_data.unwrap();
+        let data = audio_data.unwrap_or_default();
         let enable_fb = *enable_fallback_state.lock().unwrap_or_else(|e| e.into_inner());
         let qwen = { qwen_client_state.lock().unwrap_or_else(|e| e.into_inner()).clone() };
         let doubao = { doubao_client_state.lock().unwrap_or_else(|e| e.into_inner()).clone() };
@@ -2609,6 +2661,19 @@ async fn handle_assistant_mode(
     } else {
         // =================== 新会话路径 ===================
 
+        // 原子 CAS 防并行首轮触发（与追问路径相同的保护机制）
+        // rdev ghost key 可能导致两个管道并行进入此处
+        if state
+            .is_assistant_processing
+            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+            .is_err()
+        {
+            tracing::warn!("AI 助手: 已有首轮处理在进行中，忽略并行触发（疑似热键双触发）");
+            hide_overlay_window(&app).await;
+            let _ = recording_start_instant.lock().unwrap_or_else(|e| e.into_inner()).take();
+            return;
+        }
+
         // 确定 PromptMode（首轮锁定）
         let prompt_mode = if selected_text.is_some() {
             PromptMode::TextProcessing
@@ -2704,9 +2769,11 @@ async fn handle_assistant_mode(
                     asr_time_ms,
                     llm_time_ms
                 );
+                state.is_assistant_processing.store(false, Ordering::SeqCst);
             }
             Err(e) => {
                 let _ = recording_start_instant.lock().unwrap_or_else(|e| e.into_inner()).take();
+                state.is_assistant_processing.store(false, Ordering::SeqCst);
                 tracing::error!("AI 助手处理失败: {}", e);
                 let _ = app.emit("error", format!("AI 助手处理失败: {}", e));
             }
@@ -2910,9 +2977,9 @@ async fn handle_http_transcription(
                 Err(e) => {
                     if is_audio_skip_error(&e) {
                         tracing::info!("音频已跳过: {}", e);
-                        hide_overlay_silently(&app);
+                        hide_overlay_silently(&app).await;
                     } else {
-                        emit_error_and_hide_overlay(&app, format!("停止录音失败: {}", e));
+                        emit_error_and_hide_overlay(&app, format!("停止录音失败: {}", e)).await;
                     }
                     None
                 }
@@ -2967,6 +3034,11 @@ async fn handle_http_transcription(
             recording_start_instant,
         )
         .await;
+        }
+    } else {
+        // audio_data is None — emit error feedback to frontend
+        tracing::warn!("handle_http_transcription: 未获取到音频数据");
+        let _ = app.emit("error", "未获取到音频数据".to_string());
     }
 }
 
@@ -3093,7 +3165,7 @@ async fn handle_realtime_stop(
                             )
                             .await;
                         } else {
-                            emit_error_and_hide_overlay(&app, format!("转录失败: {}", e));
+                            emit_error_and_hide_overlay(&app, format!("转录失败: {}", e)).await;
                         }
                     }
                 }
@@ -3118,7 +3190,7 @@ async fn handle_realtime_stop(
                     )
                     .await;
                 } else {
-                    emit_error_and_hide_overlay(&app, "没有录制到音频数据".to_string());
+                    emit_error_and_hide_overlay(&app, "没有录制到音频数据".to_string()).await;
                 }
             }
         }
@@ -3192,7 +3264,7 @@ async fn handle_realtime_stop(
                             )
                             .await;
                         } else {
-                            emit_error_and_hide_overlay(&app, format!("转录失败: {}", e));
+                            emit_error_and_hide_overlay(&app, format!("转录失败: {}", e)).await;
                         }
                     }
                 }
@@ -3216,7 +3288,7 @@ async fn handle_realtime_stop(
                     )
                     .await;
                 } else {
-                    emit_error_and_hide_overlay(&app, "没有录制到音频数据".to_string());
+                    emit_error_and_hide_overlay(&app, "没有录制到音频数据".to_string()).await;
                 }
             }
         }
@@ -3293,7 +3365,7 @@ async fn handle_realtime_stop(
                             )
                             .await;
                         } else {
-                            emit_error_and_hide_overlay(&app, format!("转录失败: {}", e));
+                            emit_error_and_hide_overlay(&app, format!("转录失败: {}", e)).await;
                         }
                     }
                 }
@@ -3318,7 +3390,7 @@ async fn handle_realtime_stop(
                     )
                     .await;
                 } else {
-                    emit_error_and_hide_overlay(&app, "没有录制到音频数据".to_string());
+                    emit_error_and_hide_overlay(&app, "没有录制到音频数据".to_string()).await;
                 }
             }
         }
@@ -3391,21 +3463,83 @@ async fn fallback_transcription(
 }
 
 /// 统一的错误处理辅助函数 - 发送错误事件并隐藏悬浮窗
-fn emit_error_and_hide_overlay(app: &AppHandle, error_msg: String) {
+/// Note: The error_msg is sanitized to remove potential API keys or sensitive patterns
+/// before being sent to the frontend.
+async fn emit_error_and_hide_overlay(app: &AppHandle, error_msg: String) {
+    let sanitized = sanitize_error_for_frontend(&error_msg);
     tracing::error!("发送错误并隐藏悬浮窗: {}", error_msg);
-    let _ = app.emit("error", error_msg);
+    let _ = app.emit("error", sanitized);
 
     // 隐藏悬浮窗，带重试机制
-    hide_overlay_silently(app);
+    hide_overlay_silently(app).await;
+}
+
+/// Strip potential API keys and sensitive patterns from error messages
+/// before sending them to the frontend.
+fn sanitize_error_for_frontend(msg: &str) -> String {
+    // Remove common API key patterns (sk-..., Bearer tokens, etc.)
+    // Use simple substring matching rather than regex to avoid adding a dependency.
+    let mut result = msg.to_string();
+
+    // Mask "sk-" API keys (e.g. sk-abc123...)
+    if let Some(pos) = result.find("sk-") {
+        let end = result[pos..].find(|c: char| !c.is_alphanumeric() && c != '-' && c != '_')
+            .map(|end| pos + end)
+            .unwrap_or(result.len());
+        let key_len = end - pos;
+        if key_len >= 8 {
+            result.replace_range(pos..end, "sk-***");
+        }
+    }
+
+    // Mask "Bearer " tokens
+    if let Some(pos) = result.to_lowercase().find("bearer ") {
+        let actual_pos = result[pos..].find("bearer ").map(|p| pos + p).unwrap_or(pos);
+        let end = result[actual_pos + 7..]
+            .find(|c: char| c.is_whitespace() || c == '"' || c == '\'')
+            .map(|end| actual_pos + 7 + end)
+            .unwrap_or(result.len());
+        if end > actual_pos + 7 {
+            result.replace_range(actual_pos..end, "Bearer ***");
+        }
+    }
+
+    // Mask "api_key=" or "apiKey=" values
+    for key_pattern in &["api_key=", "apiKey=", "api-key="] {
+        if let Some(pos) = result.find(key_pattern) {
+            let start = pos + key_pattern.len();
+            let end = result[start..]
+                .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '&')
+                .map(|end| start + end)
+                .unwrap_or(result.len());
+            if end > start {
+                result.replace_range(start..end, "***");
+            }
+        }
+    }
+
+    // Mask "token=" values
+    if let Some(pos) = result.find("token=") {
+        let start = pos + 6;
+        let end = result[start..]
+            .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '&')
+            .map(|end| start + end)
+            .unwrap_or(result.len());
+        if end > start {
+            result.replace_range(start..end, "***");
+        }
+    }
+
+    result
 }
 
 /// 静默隐藏悬浮窗（不发送错误事件）
-fn hide_overlay_silently(app: &AppHandle) {
+async fn hide_overlay_silently(app: &AppHandle) {
     if let Some(overlay) = app.get_webview_window("overlay") {
         if let Err(e) = overlay.hide() {
             tracing::error!("隐藏悬浮窗失败: {}", e);
             // 延迟 50ms 重试一次
-            std::thread::sleep(std::time::Duration::from_millis(50));
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
             if let Err(e) = overlay.hide() {
                 tracing::error!("隐藏悬浮窗重试仍然失败: {}", e);
             }
@@ -3460,21 +3594,11 @@ async fn handle_transcription_result(
     let enable_post_process = { *state.enable_post_process.lock().unwrap_or_else(|e| e.into_inner()) };
     let enable_dictionary_enhancement = { *state.enable_dictionary_enhancement.lock().unwrap_or_else(|e| e.into_inner()) };
 
-    // 读取 TNL 开关（避免 pipeline 内做同步文件 I/O）
-    let tnl_enabled = AppConfig::load()
-        .map(|(c, _)| c.tnl_config.enabled)
-        .unwrap_or(true);
-
-    // 读取 LLM 配置用于多预设处理
-    let loaded_config = AppConfig::load().ok();
-    let llm_config = loaded_config
-        .as_ref()
-        .map(|(c, _)| c.llm_config.clone())
-        .unwrap_or_default();
-    let enable_result_selection = loaded_config
-        .as_ref()
-        .map(|(c, _)| c.enable_result_selection)
-        .unwrap_or(false);
+    // 读取 TNL 开关和 LLM 配置（避免 pipeline 内做同步文件 I/O）
+    let config = AppConfig::load().unwrap_or_default();
+    let tnl_enabled = config.0.tnl_config.enabled;
+    let llm_config = config.0.llm_config.clone();
+    let enable_result_selection = config.0.enable_result_selection;
 
     // 听写模式：只使用 NormalPipeline
     let pipeline = NormalPipeline::new();
@@ -3536,10 +3660,14 @@ async fn handle_transcription_result(
             // 如果只有原文（无 LLM 结果），直接插入原文
             if items.len() == 1 {
                 let mut inserter = { text_inserter.lock().unwrap_or_else(|e| e.into_inner()).take() };
-                if let Some(ref mut ins) = inserter {
+                // Use TextInserterGuard to ensure the inserter is returned even on panic
+                let _guard = TextInserterGuard {
+                    inserter,
+                    target: &text_inserter,
+                };
+                if let Some(ref mut ins) = _guard.inserter {
                     let _ = ins.insert_text(&items[0].text);
                 }
-                *text_inserter.lock().unwrap_or_else(|e| e.into_inner()) = inserter;
             } else {
                 // 多结果：显示悬浮窗供用户选择
                 // 保存 target_hwnd 用于后续文本插入时的焦点恢复
@@ -3776,6 +3904,10 @@ async fn finish_locked_recording(app_handle: AppHandle) -> Result<String, String
         tracing::warn!("已有停止处理正在进行中，跳过重复触发");
         return Err("正在处理中".to_string());
     }
+    // RAII guard: resets is_processing_stop to false on drop (even on panic)
+    let _stop_guard = ProcessingStopGuard {
+        flag: &state.is_processing_stop,
+    };
 
     // 清除锁定状态
     state.is_recording_locked.store(false, Ordering::SeqCst);
@@ -3876,9 +4008,6 @@ async fn finish_locked_recording(app_handle: AppHandle) -> Result<String, String
         }
     }
 
-    // 重置处理标志
-    state.is_processing_stop.store(false, Ordering::SeqCst);
-
     Ok("录音已完成".to_string())
 }
 
@@ -3903,6 +4032,10 @@ async fn cancel_locked_recording(app_handle: AppHandle) -> Result<String, String
         tracing::warn!("已有停止处理正在进行中，跳过重复触发");
         return Err("正在处理中".to_string());
     }
+    // RAII guard: resets is_processing_stop to false on drop (even on panic)
+    let _stop_guard = ProcessingStopGuard {
+        flag: &state.is_processing_stop,
+    };
 
     // 清除锁定状态
     state.is_recording_locked.store(false, Ordering::SeqCst);
@@ -3925,14 +4058,8 @@ async fn cancel_locked_recording(app_handle: AppHandle) -> Result<String, String
         }
     }
 
-    // 克隆 is_processing_stop 用于后续重置
-    let is_processing_stop = Arc::clone(&state.is_processing_stop);
-
     // 调用现有的取消逻辑
     let result = cancel_transcription(app_handle).await;
-
-    // 重置处理标志
-    is_processing_stop.store(false, Ordering::SeqCst);
 
     result
 }
@@ -3954,9 +4081,14 @@ async fn select_transcription_result(app_handle: AppHandle, text: String) -> Res
 
     // 获取 text_inserter 并插入文本
     let state = app_handle.state::<AppState>();
-    let mut inserter = { state.text_inserter.lock().unwrap_or_else(|e| e.into_inner()).take() };
+    let inserter = { state.text_inserter.lock().unwrap_or_else(|e| e.into_inner()).take() };
+    // Use TextInserterGuard to ensure the inserter is returned even on panic
+    let mut guard = TextInserterGuard {
+        inserter,
+        target: &state.text_inserter,
+    };
 
-    if let Some(ref mut ins) = inserter {
+    if let Some(ref mut ins) = guard.inserter {
         // 先恢复焦点到目标窗口
         let target_hwnd = *state.target_window_for_insert.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(hwnd) = target_hwnd {
@@ -3974,8 +4106,6 @@ async fn select_transcription_result(app_handle: AppHandle, text: String) -> Res
     } else {
         tracing::warn!("select_transcription_result: TextInserter 未初始化");
     }
-    // 归还 inserter
-    *state.text_inserter.lock().unwrap_or_else(|e| e.into_inner()) = inserter;
 
     // 隐藏悬浮窗
     if let Some(overlay) = app_handle.get_webview_window("overlay") {

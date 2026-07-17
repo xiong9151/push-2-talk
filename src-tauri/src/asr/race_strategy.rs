@@ -40,6 +40,7 @@ pub async fn transcribe_with_fallback_clients(
                 match sv_result {
                     Ok(text) => {
                         tracing::info!("✅千问重试前发现 SenseVoice 已成功，立即使用: {}", text);
+                        let _ = sensevoice_handle.abort();
                         return Ok(text.clone());
                     }
                     Err(e) => {
@@ -49,12 +50,27 @@ pub async fn transcribe_with_fallback_clients(
             }
 
             tokio::time::sleep(Duration::from_millis(500)).await;
+
+            // 再次检查 SenseVoice 结果，避免在 sleep 期间 SenseVoice 已完成
+            if let Some(sv_result) = sensevoice_result.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+                match sv_result {
+                    Ok(text) => {
+                        tracing::info!("✅千问重试 sleep 后 SenseVoice 已成功，立即使用: {}", text);
+                        let _ = sensevoice_handle.abort();
+                        return Ok(text.clone());
+                    }
+                    Err(e) => {
+                        tracing::warn!("⚠️ SenseVoice 也失败了: {}，继续千问重试", e);
+                    }
+                }
+            }
         }
 
         tracing::info!("🔄 千问第{} 次尝试(共{} 次)", attempt + 1, max_retries + 1);
         match qwen_client.transcribe_from_memory(&audio_data).await {
             Ok(text) => {
                 tracing::info!("✅千问转录成功: {}", text);
+                let _ = sensevoice_handle.abort();
                 return Ok(text);
             }
             Err(e) => {
@@ -86,7 +102,10 @@ pub async fn transcribe_with_fallback_clients(
         }
     }
 
-    Err(anyhow::anyhow!("所有API都失败"))
+    Err(anyhow::anyhow!(
+        "所有API都失败 - 千问最后一次错误: {:?}",
+        qwen_last_error
+    ))
 }
 
 pub async fn transcribe_doubao_sensevoice_race(
@@ -126,6 +145,7 @@ pub async fn transcribe_doubao_sensevoice_race(
                 match sv_result {
                     Ok(text) => {
                         tracing::info!("✅豆包重试前发现 SenseVoice 已成功，立即使用: {}", text);
+                        let _ = sensevoice_handle.abort();
                         return Ok(text.clone());
                     }
                     Err(e) => {
@@ -135,12 +155,27 @@ pub async fn transcribe_doubao_sensevoice_race(
             }
 
             tokio::time::sleep(Duration::from_millis(500)).await;
+
+            // 再次检查 SenseVoice 结果，避免在 sleep 期间 SenseVoice 已完成
+            if let Some(sv_result) = sensevoice_result.lock().unwrap_or_else(|e| e.into_inner()).as_ref() {
+                match sv_result {
+                    Ok(text) => {
+                        tracing::info!("✅豆包重试 sleep 后 SenseVoice 已成功，立即使用: {}", text);
+                        let _ = sensevoice_handle.abort();
+                        return Ok(text.clone());
+                    }
+                    Err(e) => {
+                        tracing::warn!("⚠️ SenseVoice 也失败了: {}，继续豆包重试", e);
+                    }
+                }
+            }
         }
 
         tracing::info!("🔄 豆包第{} 次尝试(共{} 次)", attempt + 1, max_retries + 1);
         match doubao_client.transcribe_bytes(&audio_data).await {
             Ok(text) => {
                 tracing::info!("✅豆包转录成功: {}", text);
+                let _ = sensevoice_handle.abort();
                 return Ok(text);
             }
             Err(e) => {
@@ -172,5 +207,8 @@ pub async fn transcribe_doubao_sensevoice_race(
         }
     }
 
-    Err(anyhow::anyhow!("所有API都失败"))
+    Err(anyhow::anyhow!(
+        "所有API都失败 - 豆包最后一次错误: {:?}",
+        doubao_last_error
+    ))
 }

@@ -134,6 +134,18 @@ fn are_keys_physically_down(keys: &[HotkeyKey]) -> bool {
 #[cfg(target_os = "windows")]
 const HOTKEY_POLL_INTERVAL_MS: u64 = 10;
 
+// ================== 非 Windows 看门狗常量 ==================
+// 注意：F2 在 Windows 资源管理器中用于文件重命名，如果用户使用 F2 作为松手模式快捷键，
+// 在 Explorer 中按下 F2 会同时触发文件重命名和录音开始。建议用户在 UI 中注意此冲突。
+// 由于本项目仅支持 Windows，此冲突仅限于 Explorer 场景。
+
+/// 看门狗检测到按键释放后等待的稳定时间（毫秒），确认用户确实松手后才触发停止
+#[cfg(not(target_os = "windows"))]
+const KEY_RELEASE_STABLE_MS: u64 = 500;
+/// 看门狗轮询间隔（毫秒）
+#[cfg(not(target_os = "windows"))]
+const WATCHDOG_INTERVAL_MS: u64 = 50;
+
 /// 严格匹配：要求目标按键全部按下，且没有额外的修饰键被按下
 #[cfg(target_os = "windows")]
 fn is_hotkey_pressed_strict(target_keys: &[HotkeyKey]) -> bool {

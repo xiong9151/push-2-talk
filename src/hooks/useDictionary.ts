@@ -70,17 +70,25 @@ export function useDictionary(initialDictionary: string[] = []): UseDictionaryRe
   // 监听词典更新事件（实时刷新）
   useEffect(() => {
     let unlisten: (() => void) | undefined;
+    let cancelled = false;
 
     const setupListener = async () => {
-      unlisten = await listen("dictionary_updated", () => {
+      const u = await listen("dictionary_updated", () => {
+        if (cancelled) return;
         console.log("收到词典更新事件，刷新词典");
         refreshDictionary();
       });
+      if (cancelled) {
+        u();
+      } else {
+        unlisten = u;
+      }
     };
 
     setupListener();
 
     return () => {
+      cancelled = true;
       if (unlisten) {
         unlisten();
       }

@@ -85,6 +85,15 @@ impl AssistantProcessor {
             return Ok(String::new());
         }
 
+        // 如果选中文本为空，降级为问答模式处理
+        if selected_text.trim().is_empty() {
+            tracing::info!(
+                "AssistantProcessor: 选中文本为空，降级为问答模式处理指令: {}",
+                user_instruction
+            );
+            return self.process(user_instruction).await;
+        }
+
         tracing::info!(
             "AssistantProcessor: 文本处理模式 (指令: {}, 上下文长度: {} 字符)",
             user_instruction,
@@ -220,7 +229,11 @@ pub(crate) fn build_followup_messages(
 ///
 /// **答**: AI 回复
 /// ```
+///
+/// 注意：输出最多截断至 `MAX_COPY_LENGTH` 字符，防止 IPC 负载过大。
 pub(crate) fn format_conversation_for_copy(turns: &[ConversationTurn]) -> String {
+    const MAX_COPY_LENGTH: usize = 10_000;
+
     let mut parts: Vec<String> = Vec::new();
 
     for turn in turns {
@@ -237,7 +250,20 @@ pub(crate) fn format_conversation_for_copy(turns: &[ConversationTurn]) -> String
         parts.push(section);
     }
 
-    parts.join("\n\n---\n\n")
+    let output = parts.join("\n\n---\n\n");
+
+    // 截断至最大长度，避免 IPC 负载过大
+    if output.len() > MAX_COPY_LENGTH {
+        let truncated: String = output.chars().take(MAX_COPY_LENGTH).collect();
+        tracing::warn!(
+            "format_conversation_for_copy: 输出长度 {} 超过上限 {}，已截断",
+            output.len(),
+            MAX_COPY_LENGTH
+        );
+        return truncated;
+    }
+
+    output
 }
 
 #[cfg(test)]

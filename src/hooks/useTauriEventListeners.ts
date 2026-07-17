@@ -232,7 +232,9 @@ export function useTauriEventListeners({
         }))) return;
 
         if (!(await registerListener<string>("error", (errMsg) => {
-          setError(errMsg);
+          // 防御性清洗：移除可能泄露的 API key 模式（sk- 开头的密钥令牌）
+          const sanitized = errMsg.replace(/\b(sk-|eyJ)[a-zA-Z0-9_-]{10,}\b/g, '***');
+          setError(sanitized);
           setStatus("running");
 
           // 注意：后端在错误情况下不会更新统计数据（只统计成功的录音）

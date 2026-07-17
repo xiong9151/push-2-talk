@@ -73,13 +73,36 @@ fn send_key_up(vk: VIRTUAL_KEY) -> Result<()> {
     Ok(())
 }
 
+/// RAII 守卫：确保 Ctrl 键在作用域结束时被释放
+///
+/// 当 send_ctrl_c/send_ctrl_v 中途失败时，Ctrl 键不会卡住
+#[cfg(target_os = "windows")]
+struct CtrlKeyGuard;
+
+#[cfg(target_os = "windows")]
+impl Drop for CtrlKeyGuard {
+    fn drop(&mut self) {
+        // 释放 Ctrl 键，忽略错误（最大努力清理）
+        let _ = send_key_up(VK_CONTROL);
+        tracing::trace!("CtrlKeyGuard: 已释放 Ctrl 键");
+    }
+}
+
+/// 按下 Ctrl 键并返回 RAII 守卫
+///
+/// 守卫析构时会自动释放 Ctrl 键，防止中途失败导致键卡住
+#[cfg(target_os = "windows")]
+fn press_ctrl() -> Result<CtrlKeyGuard> {
+    send_key_down(VK_CONTROL)?;
+    Ok(CtrlKeyGuard)
+}
+
 /// 模拟 Ctrl+C 组合键（复制）
 #[cfg(target_os = "windows")]
 pub fn send_ctrl_c() -> Result<()> {
     tracing::debug!("win32_input: 发送 Ctrl+C");
 
-    // 按下 Ctrl
-    send_key_down(VK_CONTROL)?;
+    let _guard = press_ctrl()?;
     thread::sleep(Duration::from_millis(KEY_DELAY_MS));
 
     // 按下并释放 C
@@ -88,9 +111,7 @@ pub fn send_ctrl_c() -> Result<()> {
     send_key_up(VK_C)?;
     thread::sleep(Duration::from_millis(KEY_DELAY_MS));
 
-    // 释放 Ctrl
-    send_key_up(VK_CONTROL)?;
-
+    // _guard 在此析构，自动释放 Ctrl 键
     Ok(())
 }
 
@@ -99,8 +120,7 @@ pub fn send_ctrl_c() -> Result<()> {
 pub fn send_ctrl_v() -> Result<()> {
     tracing::debug!("win32_input: 发送 Ctrl+V");
 
-    // 按下 Ctrl
-    send_key_down(VK_CONTROL)?;
+    let _guard = press_ctrl()?;
     thread::sleep(Duration::from_millis(KEY_DELAY_MS));
 
     // 按下并释放 V
@@ -109,9 +129,7 @@ pub fn send_ctrl_v() -> Result<()> {
     send_key_up(VK_V)?;
     thread::sleep(Duration::from_millis(KEY_DELAY_MS));
 
-    // 释放 Ctrl
-    send_key_up(VK_CONTROL)?;
-
+    // _guard 在此析构，自动释放 Ctrl 键
     Ok(())
 }
 

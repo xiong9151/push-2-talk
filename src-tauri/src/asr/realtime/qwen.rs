@@ -272,7 +272,21 @@ impl ConnectionPool {
             let mut final_text = String::new();
             let mut has_result = false;
 
-            while let Some(msg) = read.next().await {
+            loop {
+                let msg = match timeout(Duration::from_secs(30), read.next()).await {
+                    Ok(Some(msg)) => msg,
+                    Ok(None) => break, // 流已关闭
+                    Err(_) => {
+                        tracing::warn!("Qwen WebSocket 接收超时（30秒无事件），断开连接");
+                        if !has_result {
+                            let _ = result_tx
+                                .send(Err(anyhow::anyhow!("WebSocket 接收超时")))
+                                .await;
+                        }
+                        break;
+                    }
+                };
+
                 match msg {
                     Ok(Message::Text(text)) => {
                         match serde_json::from_str::<serde_json::Value>(&text) {

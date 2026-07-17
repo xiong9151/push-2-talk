@@ -119,6 +119,13 @@ pub fn start_learning_observation(
         let _cleanup = CleanupGuard { hwnd: target_hwnd };
 
         // 等待观察期（用户修正时间）
+        // FIXME: 5秒观察期只采集最终状态，中间多次编辑会被丢失。
+        //   如果用户在5秒内逐步修正（如 erase → erase → eraser），diff_analyzer
+        //   只能看到 asr_text 与最终 corrected 的差异，无法区分"短期修正链"。
+        //   更理想的方案：
+        //   - 在观察期内每轮都保存一个快照，然后对相邻快照做 diff
+        //   - 聚合所有中间 diff，避免遗漏短暂出现的专有名词
+        //   但当前方案实现简单、开销小，叠加 LLM 判断后漏报率可接受。
         let duration = Duration::from_secs(config.observation_duration_secs.max(1));
         let start_time = Instant::now();
         tracing::info!(

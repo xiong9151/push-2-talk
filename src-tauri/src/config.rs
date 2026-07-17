@@ -1436,9 +1436,69 @@ impl AppConfig {
         Ok(app_dir.join("config.json"))
     }
 
+    /// 从磁盘加载配置，跳过迁移逻辑。
+    ///
+    /// 热路径调用者应使用此方法（而非 `load_with_migration()`），避免重复执行昂贵的迁移逻辑。
+    /// 如果文件不存在或损坏，会尝试从 `.bak` 备份恢复。
     pub fn load() -> Result<(Self, bool)> {
         let path = Self::config_path()?;
         tracing::info!("尝试从以下路径加载配置: {:?}", path);
+
+        // Bug 2: 如果配置文件不存在，尝试从备份恢复
+        if !path.exists() {
+            let backup_path = path.with_extension("json.bak");
+            if backup_path.exists() {
+                tracing::warn!("配置文件不存在但备份文件存在，尝试从备份恢复");
+                if let Err(e) = std::fs::rename(&backup_path, &path) {
+                    tracing::error!("从备份恢复配置文件失败: {}", e);
+                } else {
+                    tracing::info!("已从备份恢复配置文件");
+                }
+            }
+        }
+
+        if path.exists() {
+            let content = std::fs::read_to_string(&path)?;
+            match serde_json::from_str::<AppConfig>(&content) {
+                Ok(config) => {
+                    tracing::info!("配置加载成功");
+                    Ok((config, false))
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "直接反序列化失败，回退到完整加载流程（含迁移）: {}",
+                        e
+                    );
+                    Self::load_with_migration()
+                }
+            }
+        } else {
+            tracing::warn!("配置文件不存在，创建并返回默认配置");
+            Ok((Self::new(), false))
+        }
+    }
+
+    /// 从磁盘加载配置并运行所有迁移逻辑。
+    ///
+    /// 仅在持有 CONFIG_LOCK 时使用（例如 `load_persisted_config`）。
+    /// 迁移逻辑是昂贵的（检查旧格式、生成 Provider Registry 等），
+    /// 不应在每次热路径读取时运行。
+    pub fn load_with_migration() -> Result<(Self, bool)> {
+        let path = Self::config_path()?;
+        tracing::info!("尝试从以下路径加载配置（含迁移）: {:?}", path);
+
+        // Bug 2: 如果配置文件不存在，尝试从备份恢复
+        if !path.exists() {
+            let backup_path = path.with_extension("json.bak");
+            if backup_path.exists() {
+                tracing::warn!("配置文件不存在但备份文件存在，尝试从备份恢复");
+                if let Err(e) = std::fs::rename(&backup_path, &path) {
+                    tracing::error!("从备份恢复配置文件失败: {}", e);
+                } else {
+                    tracing::info!("已从备份恢复配置文件");
+                }
+            }
+        }
 
         // 跟踪是否发生了迁移（调用者可根据此决定是否保存）
         let mut migrated = false;
@@ -1926,6 +1986,27 @@ impl AppConfig {
         }
     }
 
+    /// 创建一个适合发送到前端的副本（移除所有敏感字段）。
+    ///
+    /// 清空以下敏感信息：
+    /// - LLM Provider 的 API Key（数组中存储，DevTools 中不易追踪）
+    /// - 自定义 ASR 提供商的 API Key（数组中存储）
+    ///
+    /// 保留顶层 ASR API Key 和 ASR 凭据中的 Key（前端 UI 直接显示需要）。
+    pub fn sanitized_for_frontend(&self) -> Self {
+        let mut s = self.clone();
+        // 清空所有 LLM Provider 的 API Key（数组中的敏感字段）
+        for provider in &mut s.llm_config.shared.providers {
+            provider.api_key.clear();
+        }
+        // 清空自定义 ASR 提供商中的 API Key（数组中的敏感字段）
+        for provider in &mut s.custom_asr_providers {
+            provider.api_key.clear();
+        }
+        s
+    }
+
+    /// 保存配置到文件（原子写入）
     pub fn save(&self) -> Result<()> {
         let path = Self::config_path()?;
         let content = serde_json::to_string_pretty(self)?;
