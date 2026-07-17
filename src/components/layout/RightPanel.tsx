@@ -91,28 +91,22 @@ export function RightPanel({
   // 多结果选择模式：显示多选预设复选框
   const resultSelectionEnabled = llmConfig.presets.some((p) => p.selected_for_display);
 
-  // 切换预设的 selected_for_display
-  const handleTogglePresetDisplay = (presetId: string) => {
-    setLlmConfig((prev) => ({
-      ...prev,
-      presets: prev.presets.map((p) =>
-        p.id === presetId ? { ...p, selected_for_display: !p.selected_for_display } : p
-      ),
-    }));
-  };
-
   // 单选预设切换（传统模式）
   const handleSinglePresetChange = (id: string) => {
     setLlmConfig((prev) => ({ ...prev, active_preset_id: id }));
   };
 
   const handleTogglePresetAndSave = async (presetId: string) => {
-    handleTogglePresetDisplay(presetId);
-    // 保存配置：更新 presets 到后端
+    // 同时更新 React state 和持久化
     const updatedPresets = llmConfig.presets.map((p) =>
       p.id === presetId ? { ...p, selected_for_display: !p.selected_for_display } : p
     );
-    // 同步多结果选择主开关：只要还有 >=1 个预设被勾选就启用
+    setLlmConfig((prev) => ({
+      ...prev,
+      presets: prev.presets.map((p) =>
+        p.id === presetId ? { ...p, selected_for_display: !p.selected_for_display } : p
+      ),
+    }));
     const anyChecked = updatedPresets.some((p) => p.selected_for_display);
     await saveImmediately({
       llmConfig: { ...llmConfig, presets: updatedPresets },
@@ -121,15 +115,15 @@ export function RightPanel({
   };
 
   const handleToggleResultSelection = async (enabled: boolean) => {
-    // 打开多结果选择时，默认选中所有预设
     if (enabled) {
+      // 打开多结果选择时，默认选中所有预设
       const updatedPresets = llmConfig.presets.map((p) => ({
         ...p,
         selected_for_display: true,
       }));
       setLlmConfig((prev) => ({
         ...prev,
-        presets: updatedPresets,
+        presets: prev.presets.map((p) => ({ ...p, selected_for_display: true })),
       }));
       await saveImmediately({
         llmConfig: { ...llmConfig, presets: updatedPresets },
@@ -143,7 +137,7 @@ export function RightPanel({
       }));
       setLlmConfig((prev) => ({
         ...prev,
-        presets: updatedPresets,
+        presets: prev.presets.map((p) => ({ ...p, selected_for_display: false })),
       }));
       await saveImmediately({
         llmConfig: { ...llmConfig, presets: updatedPresets },
