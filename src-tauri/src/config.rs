@@ -2008,6 +2008,7 @@ impl AppConfig {
         s.llm_config.feature_override.api_key = String::new();
         s.assistant_config.llm.api_key = String::new();
         s.smart_command_config.api_key.clear();
+        s.learning_config.feature_override.api_key = String::new();
         s
     }
 

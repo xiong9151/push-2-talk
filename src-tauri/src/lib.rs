@@ -3661,7 +3661,7 @@ async fn handle_transcription_result(
             if items.len() == 1 {
                 let mut inserter = { text_inserter.lock().unwrap_or_else(|e| e.into_inner()).take() };
                 // Use TextInserterGuard to ensure the inserter is returned even on panic
-                let _guard = TextInserterGuard {
+                let mut _guard = TextInserterGuard {
                     inserter,
                     target: &text_inserter,
                 };

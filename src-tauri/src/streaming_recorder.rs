@@ -112,6 +112,7 @@ impl StreamingRecorder {
 
         // 清空之前的数据
         self.full_audio_data.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        self.data_written.store(false, Ordering::Release);
         *self.is_recording.lock().unwrap_or_else(|e| e.into_inner()) = true;
 
         // 创建音频块通道（缓冲 500 个块，约 100 秒，远超任何 ASR 超时）

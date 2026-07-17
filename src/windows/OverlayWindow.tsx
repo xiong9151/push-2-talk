@@ -482,6 +482,7 @@ export default function OverlayWindow() {
     }, 300);
     try {
       await invoke("finish_locked_recording");
+      setIsSubmitting(false);
     } catch (e) {
       console.error("完成录音失败:", e);
       setIsSubmitting(false);
@@ -498,6 +499,7 @@ export default function OverlayWindow() {
     }, 300);
     try {
       await invoke("cancel_locked_recording");
+      setIsSubmitting(false);
     } catch (e) {
       console.error("取消录音失败:", e);
       setIsSubmitting(false);
