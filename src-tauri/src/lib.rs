@@ -1163,15 +1163,16 @@ async fn handle_recording_start(
                 // Custom ASR provider does not support realtime mode; fall through to HTTP mode
                 tracing::warn!("自定义 ASR 提供商不支持实时模式，回退到 HTTP 模式");
                 // 检查并停止可能仍在活动的 streaming_recorder，防止音频设备独占冲突
-                let mut streaming_guard = streaming_recorder.lock().unwrap_or_else(|e| e.into_inner());
-                if let Some(ref mut stream_rec) = *streaming_guard {
-                    if stream_rec.is_recording() {
-                        tracing::warn!("发现正在进行的流式录音，先停止它");
-                        let _ = stream_rec.stop_streaming();
+                let streaming_stop_error = {
+                    let mut streaming_guard = streaming_recorder.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Some(ref mut stream_rec) = *streaming_guard {
+                        if stream_rec.is_recording() {
+                            tracing::warn!("发现正在进行的流式录音，先停止它");
+                            let _ = stream_rec.stop_streaming();
+                        }
                     }
-                }
-                drop(streaming_guard);
-                // Wrap recorder_guard usage in a block so it's dropped before any .await
+                    None::<String>
+                };
                 let init_error = {
                     let mut recorder_guard = recorder.lock().unwrap_or_else(|e| e.into_inner());
                     if recorder_guard.is_none() {
@@ -1187,6 +1188,7 @@ async fn handle_recording_start(
                         None
                     }
                 };
+                if let Some(_) = streaming_stop_error {}
                 if let Some(msg) = init_error {
                     emit_error_and_hide_overlay(&app, msg).await;
                     return;
@@ -1211,14 +1213,15 @@ async fn handle_recording_start(
                 // SiliconFlow/SenseVoice 不支持实时模式，回退到 HTTP 模式
                 tracing::warn!("SiliconFlow/SenseVoice 不支持实时模式，回退到 HTTP 模式");
                 // 检查并停止可能仍在活动的 streaming_recorder，防止音频设备独占冲突
-                let mut streaming_guard = streaming_recorder.lock().unwrap_or_else(|e| e.into_inner());
-                if let Some(ref mut stream_rec) = *streaming_guard {
-                    if stream_rec.is_recording() {
-                        tracing::warn!("发现正在进行的流式录音，先停止它");
-                        let _ = stream_rec.stop_streaming();
+                {
+                    let mut streaming_guard = streaming_recorder.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Some(ref mut stream_rec) = *streaming_guard {
+                        if stream_rec.is_recording() {
+                            tracing::warn!("发现正在进行的流式录音，先停止它");
+                            let _ = stream_rec.stop_streaming();
+                        }
                     }
                 }
-                drop(streaming_guard);
                 // Wrap recorder_guard usage in a block so it's dropped before any .await
                 let init_error = {
                     let mut recorder_guard = recorder.lock().unwrap_or_else(|e| e.into_inner());
@@ -3142,29 +3145,26 @@ async fn handle_http_transcription(
     recording_start_instant: Arc<Mutex<Option<std::time::Instant>>>,
 ) {
     // 停止录音并直接获取内存中的音频数据
-    let audio_data = {
+    let rec_result = {
         let mut recorder_guard = recorder.lock().unwrap_or_else(|e| e.into_inner());
-        let rec_result = if let Some(ref mut rec) = *recorder_guard {
+        if let Some(ref mut rec) = *recorder_guard {
             Some(rec.stop_recording_to_memory())
         } else {
             None
-        };
-        // Drop guard before any .await
-        drop(recorder_guard);
-
-        match rec_result {
-            Some(Ok(data)) => Some(data),
-            Some(Err(e)) => {
-                if is_audio_skip_error(&e) {
-                    tracing::info!("音频已跳过: {}", e);
-                    hide_overlay_silently(&app).await;
-                } else {
-                    emit_error_and_hide_overlay(&app, format!("停止录音失败: {}", e)).await;
-                }
-                None
-            }
-            None => None,
         }
+    };
+    let audio_data = match rec_result {
+        Some(Ok(data)) => Some(data),
+        Some(Err(e)) => {
+            if is_audio_skip_error(&e) {
+                tracing::info!("音频已跳过: {}", e);
+                hide_overlay_silently(&app).await;
+            } else {
+                emit_error_and_hide_overlay(&app, format!("停止录音失败: {}", e)).await;
+            }
+            None
+        }
+        None => None,
     };
 
     if let Some(audio_data) = audio_data {
