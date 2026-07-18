@@ -207,7 +207,7 @@ export function useTauriEventListeners({
             } else if (enableDictionaryEnhancement) {
               presetNames = ["璇嶅簱澧炲己"];
             } else {
-              presetNames = ["鏂囨湰瑙勮寖鍖?];
+              presetNames = ["文本规范化"];
             }
           }
 
