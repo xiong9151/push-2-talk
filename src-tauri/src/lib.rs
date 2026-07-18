@@ -1412,21 +1412,27 @@ async fn handle_doubao_ime_realtime_start(
 ) {
     tracing::info!("启动豆包输入法实时流式转录...");
 
-    let chunk_rx = {
+    let start_result = {
         let mut streaming_guard = streaming_recorder.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(ref mut rec) = *streaming_guard {
+        let result = if let Some(ref mut rec) = *streaming_guard {
             if rec.is_recording() {
                 tracing::warn!("发现正在进行中的流式录音，先停止它");
                 let _ = rec.stop_streaming();
             }
-            match rec.start_streaming(Some(app.clone())) {
-                Ok(rx) => Some(rx),
-                Err(e) => {
-                    emit_error_and_hide_overlay(&app, format!("录音失败: {}", e)).await;
-                    None
-                }
-            }
+            Some(rec.start_streaming(Some(app.clone())))
         } else {
+            None
+        };
+        drop(streaming_guard);
+        result
+    };
+    let chunk_rx = match start_result {
+        Some(Ok(rx)) => Some(rx),
+        Some(Err(e)) => {
+            emit_error_and_hide_overlay(&app, format!("录音失败: {}", e)).await;
+            None
+        }
+        None => {
             emit_error_and_hide_overlay(&app, "流式录音器未初始化".to_string()).await;
             None
         }
@@ -1644,22 +1650,28 @@ async fn handle_qwen_realtime_start(
                 });
             }
 
-            let chunk_rx = {
+            let start_result = {
                 let mut streaming_guard = streaming_recorder.lock().unwrap_or_else(|e| e.into_inner());
-                if let Some(ref mut rec) = *streaming_guard {
+                let result = if let Some(ref mut rec) = *streaming_guard {
                     // 检查是否已在录音，如果是则先停止
                     if rec.is_recording() {
                         tracing::warn!("发现正在进行的流式录音，先停止它");
                         let _ = rec.stop_streaming();
                     }
-                    match rec.start_streaming(Some(app.clone())) {
-                        Ok(rx) => Some(rx),
-                        Err(e) => {
-                            emit_error_and_hide_overlay(&app, format!("录音失败: {}", e)).await;
-                            None
-                        }
-                    }
+                    Some(rec.start_streaming(Some(app.clone())))
                 } else {
+                    None
+                };
+                drop(streaming_guard);
+                result
+            };
+            let chunk_rx = match start_result {
+                Some(Ok(rx)) => Some(rx),
+                Some(Err(e)) => {
+                    emit_error_and_hide_overlay(&app, format!("录音失败: {}", e)).await;
+                    None
+                }
+                None => {
                     emit_error_and_hide_overlay(&app, "流式录音器未初始化".to_string()).await;
                     None
                 }
@@ -1703,18 +1715,21 @@ async fn handle_qwen_realtime_start(
         Err(e) => {
             tracing::error!("建立千问 WebSocket 连接失败: {}，回退到普通录音", e);
 
-            let mut streaming_guard = streaming_recorder.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(ref mut rec) = *streaming_guard {
-                // 检查是否已在录音，如果是则先停止
-                if rec.is_recording() {
-                    tracing::warn!("发现正在进行的流式录音，先停止它");
-                    let _ = rec.stop_streaming();
+            let start_error = {
+                let mut streaming_guard = streaming_recorder.lock().unwrap_or_else(|e| e.into_inner());
+                if let Some(ref mut rec) = *streaming_guard {
+                    // 检查是否已在录音，如果是则先停止
+                    if rec.is_recording() {
+                        tracing::warn!("发现正在进行的流式录音，先停止它");
+                        let _ = rec.stop_streaming();
+                    }
+                    rec.start_streaming(Some(app.clone())).err().map(|e| format!("录音失败: {}", e))
+                } else {
+                    Some("录音器未初始化".to_string())
                 }
-                if let Err(e) = rec.start_streaming(Some(app.clone())) {
-                    emit_error_and_hide_overlay(&app, format!("录音失败: {}", e)).await;
-                }
-            } else {
-                emit_error_and_hide_overlay(&app, "录音器未初始化".to_string()).await;
+            };
+            if let Some(msg) = start_error {
+                emit_error_and_hide_overlay(&app, msg).await;
             }
         }
     }
