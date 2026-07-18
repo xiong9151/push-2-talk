@@ -1304,9 +1304,10 @@ async fn handle_doubao_realtime_start(
 ) {
     tracing::info!("启动豆包实时流式转录...");
 
-    let chunk_rx = {
+    // 提取 start_result 到独立的 scope 中，确保 streaming_guard 在 .await 前释放
+    let start_result = {
         let mut streaming_guard = streaming_recorder.lock().unwrap_or_else(|e| e.into_inner());
-        let start_result = if let Some(ref mut rec) = *streaming_guard {
+        let result = if let Some(ref mut rec) = *streaming_guard {
             // 检查是否已在录音，如果是则先停止
             if rec.is_recording() {
                 tracing::warn!("发现正在进行的流式录音，先停止它");
@@ -1317,16 +1318,17 @@ async fn handle_doubao_realtime_start(
             None
         };
         drop(streaming_guard);
-        match start_result {
-            Some(Ok(rx)) => Some(rx),
-            Some(Err(e)) => {
-                emit_error_and_hide_overlay(&app, format!("录音失败: {}", e)).await;
-                None
-            }
-            None => {
-                emit_error_and_hide_overlay(&app, "流式录音器未初始化".to_string()).await;
-                None
-            }
+        result
+    };
+    let chunk_rx = match start_result {
+        Some(Ok(rx)) => Some(rx),
+        Some(Err(e)) => {
+            emit_error_and_hide_overlay(&app, format!("录音失败: {}", e)).await;
+            None
+        }
+        None => {
+            emit_error_and_hide_overlay(&app, "流式录音器未初始化".to_string()).await;
+            None
         }
     };
 
