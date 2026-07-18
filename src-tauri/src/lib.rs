@@ -1306,22 +1306,27 @@ async fn handle_doubao_realtime_start(
 
     let chunk_rx = {
         let mut streaming_guard = streaming_recorder.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(ref mut rec) = *streaming_guard {
+        let start_result = if let Some(ref mut rec) = *streaming_guard {
             // 检查是否已在录音，如果是则先停止
             if rec.is_recording() {
                 tracing::warn!("发现正在进行的流式录音，先停止它");
                 let _ = rec.stop_streaming();
             }
-            match rec.start_streaming(Some(app.clone())) {
-                Ok(rx) => Some(rx),
-                Err(e) => {
-                    emit_error_and_hide_overlay(&app, format!("录音失败: {}", e)).await;
-                    None
-                }
-            }
+            Some(rec.start_streaming(Some(app.clone())))
         } else {
-            emit_error_and_hide_overlay(&app, "流式录音器未初始化".to_string()).await;
             None
+        };
+        drop(streaming_guard);
+        match start_result {
+            Some(Ok(rx)) => Some(rx),
+            Some(Err(e)) => {
+                emit_error_and_hide_overlay(&app, format!("录音失败: {}", e)).await;
+                None
+            }
+            None => {
+                emit_error_and_hide_overlay(&app, "流式录音器未初始化".to_string()).await;
+                None
+            }
         }
     };
 
@@ -2540,26 +2545,29 @@ async fn handle_assistant_mode(
         (result, audio_data)
     } else {
         // HTTP 模式：停止录音并获取数据
-        let audio_data = {
+        let stop_result = {
             let mut recorder_guard = recorder.lock().unwrap_or_else(|e| e.into_inner());
-            if let Some(ref mut rec) = *recorder_guard {
-                match rec.stop_recording_to_memory() {
-                    Ok(data) => Some(data),
-                    Err(e) => {
-                        if is_audio_skip_error(&e) {
-                            tracing::info!("音频已跳过: {}", e);
-                            hide_overlay_silently(&app).await;
-                        } else {
-                            emit_error_and_hide_overlay(&app, format!("停止录音失败: {}", e)).await;
-                        }
-                        None
-                    }
-                }
+            let result = if let Some(ref mut rec) = *recorder_guard {
+                Some(rec.stop_recording_to_memory())
             } else {
                 None
-            }
+            };
+            drop(recorder_guard);
+            result
         };
-
+        let audio_data = match stop_result {
+            Some(Ok(data)) => Some(data),
+            Some(Err(e)) => {
+                if is_audio_skip_error(&e) {
+                    tracing::info!("音频已跳过: {}", e);
+                    hide_overlay_silently(&app).await;
+                } else {
+                    emit_error_and_hide_overlay(&app, format!("停止录音失败: {}", e)).await;
+                }
+                None
+            }
+            None => None,
+        };
         let result = if let Some(ref data) = audio_data {
             // 使用 HTTP ASR
             let enable_fb = *enable_fallback_state.lock().unwrap_or_else(|e| e.into_inner());
