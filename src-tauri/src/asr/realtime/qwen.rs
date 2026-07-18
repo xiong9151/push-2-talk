@@ -343,7 +343,6 @@ impl ConnectionPool {
                                                 .send(Ok(final_text.clone()))
                                                 .await;
                                         }
-                                        result_sent = true;
                                         return;
                                     }
                                     "error" => {

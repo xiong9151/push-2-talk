@@ -178,7 +178,7 @@ impl NormalPipeline {
 
         match arbitration {
             Ok(Ok(result)) => (result.text, Some(result.diagnostics), Some(result.elapsed_ms)),
-            Ok(Err(e)) => {
+            Ok(Err(_e)) => {
                 let mut diagnostics = fallback_diagnostics;
                 diagnostics.mark_pending_skipped(
                     TnlCandidateDecision::SkippedError,

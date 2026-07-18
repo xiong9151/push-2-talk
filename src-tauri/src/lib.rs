@@ -1171,29 +1171,40 @@ async fn handle_recording_start(
                     }
                 }
                 drop(streaming_guard);
-                let mut recorder_guard = recorder.lock().unwrap_or_else(|e| e.into_inner());
-                if recorder_guard.is_none() {
-                    tracing::info!("AudioRecorder 未初始化，按需创建 HTTP 模式录音器");
-                    match AudioRecorder::new() {
-                        Ok(new_rec) => {
-                            *recorder_guard = Some(new_rec);
+                // Wrap recorder_guard usage in a block so it's dropped before any .await
+                let init_error = {
+                    let mut recorder_guard = recorder.lock().unwrap_or_else(|e| e.into_inner());
+                    if recorder_guard.is_none() {
+                        tracing::info!("AudioRecorder 未初始化，按需创建 HTTP 模式录音器");
+                        match AudioRecorder::new() {
+                            Ok(new_rec) => {
+                                *recorder_guard = Some(new_rec);
+                                None
+                            }
+                            Err(e) => Some(format!("初始化录音器失败: {}", e)),
                         }
-                        Err(e) => {
-                            emit_error_and_hide_overlay(&app, format!("初始化录音器失败: {}", e)).await;
-                            return;
-                        }
+                    } else {
+                        None
                     }
+                };
+                if let Some(msg) = init_error {
+                    emit_error_and_hide_overlay(&app, msg).await;
+                    return;
                 }
-                if let Some(ref mut rec) = *recorder_guard {
-                    if rec.is_recording() {
-                        tracing::warn!("发现正在进行的录音，先停止它");
-                        let _ = rec.stop_recording_to_memory();
+                let start_error = {
+                    let mut recorder_guard = recorder.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Some(ref mut rec) = *recorder_guard {
+                        if rec.is_recording() {
+                            tracing::warn!("发现正在进行的录音，先停止它");
+                            let _ = rec.stop_recording_to_memory();
+                        }
+                        rec.start_recording(Some(app.clone())).err().map(|e| format!("录音失败: {}", e))
+                    } else {
+                        Some("录音器未初始化".to_string())
                     }
-                    if let Err(e) = rec.start_recording(Some(app.clone())) {
-                        emit_error_and_hide_overlay(&app, format!("录音失败: {}", e)).await;
-                    }
-                } else {
-                    emit_error_and_hide_overlay(&app, "录音器未初始化".to_string()).await;
+                };
+                if let Some(msg) = start_error {
+                    emit_error_and_hide_overlay(&app, msg).await;
                 }
             }
             Some(config::AsrProvider::SiliconFlow) => {
@@ -1208,29 +1219,40 @@ async fn handle_recording_start(
                     }
                 }
                 drop(streaming_guard);
-                let mut recorder_guard = recorder.lock().unwrap_or_else(|e| e.into_inner());
-                if recorder_guard.is_none() {
-                    tracing::info!("AudioRecorder 未初始化，按需创建 HTTP 模式录音器");
-                    match AudioRecorder::new() {
-                        Ok(new_rec) => {
-                            *recorder_guard = Some(new_rec);
+                // Wrap recorder_guard usage in a block so it's dropped before any .await
+                let init_error = {
+                    let mut recorder_guard = recorder.lock().unwrap_or_else(|e| e.into_inner());
+                    if recorder_guard.is_none() {
+                        tracing::info!("AudioRecorder 未初始化，按需创建 HTTP 模式录音器");
+                        match AudioRecorder::new() {
+                            Ok(new_rec) => {
+                                *recorder_guard = Some(new_rec);
+                                None
+                            }
+                            Err(e) => Some(format!("初始化录音器失败: {}", e)),
                         }
-                        Err(e) => {
-                            emit_error_and_hide_overlay(&app, format!("初始化录音器失败: {}", e)).await;
-                            return;
-                        }
+                    } else {
+                        None
                     }
+                };
+                if let Some(msg) = init_error {
+                    emit_error_and_hide_overlay(&app, msg).await;
+                    return;
                 }
-                if let Some(ref mut rec) = *recorder_guard {
-                    if rec.is_recording() {
-                        tracing::warn!("发现正在进行的录音，先停止它");
-                        let _ = rec.stop_recording_to_memory();
+                let start_error = {
+                    let mut recorder_guard = recorder.lock().unwrap_or_else(|e| e.into_inner());
+                    if let Some(ref mut rec) = *recorder_guard {
+                        if rec.is_recording() {
+                            tracing::warn!("发现正在进行的录音，先停止它");
+                            let _ = rec.stop_recording_to_memory();
+                        }
+                        rec.start_recording(Some(app.clone())).err().map(|e| format!("录音失败: {}", e))
+                    } else {
+                        Some("录音器未初始化".to_string())
                     }
-                    if let Err(e) = rec.start_recording(Some(app.clone())) {
-                        emit_error_and_hide_overlay(&app, format!("录音失败: {}", e)).await;
-                    }
-                } else {
-                    emit_error_and_hide_overlay(&app, "录音器未初始化".to_string()).await;
+                };
+                if let Some(msg) = start_error {
+                    emit_error_and_hide_overlay(&app, msg).await;
                 }
             }
             _ => {
@@ -1247,18 +1269,21 @@ async fn handle_recording_start(
             }
         }
     } else {
-        let mut recorder_guard = recorder.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(ref mut rec) = *recorder_guard {
-            // 检查是否已在录音，如果是则先停止
-            if rec.is_recording() {
-                tracing::warn!("发现正在进行的录音，先停止它");
-                let _ = rec.stop_recording_to_memory();
+        let start_error = {
+            let mut recorder_guard = recorder.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(ref mut rec) = *recorder_guard {
+                // 检查是否已在录音，如果是则先停止
+                if rec.is_recording() {
+                    tracing::warn!("发现正在进行的录音，先停止它");
+                    let _ = rec.stop_recording_to_memory();
+                }
+                rec.start_recording(Some(app.clone())).err().map(|e| format!("录音失败: {}", e))
+            } else {
+                Some("录音器未初始化".to_string())
             }
-            if let Err(e) = rec.start_recording(Some(app.clone())) {
-                emit_error_and_hide_overlay(&app, format!("录音失败: {}", e)).await;
-            }
-        } else {
-            emit_error_and_hide_overlay(&app, "录音器未初始化".to_string()).await;
+        };
+        if let Some(msg) = start_error {
+            emit_error_and_hide_overlay(&app, msg).await;
         }
     }
 }
@@ -3119,21 +3144,26 @@ async fn handle_http_transcription(
     // 停止录音并直接获取内存中的音频数据
     let audio_data = {
         let mut recorder_guard = recorder.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(ref mut rec) = *recorder_guard {
-            match rec.stop_recording_to_memory() {
-                Ok(data) => Some(data),
-                Err(e) => {
-                    if is_audio_skip_error(&e) {
-                        tracing::info!("音频已跳过: {}", e);
-                        hide_overlay_silently(&app).await;
-                    } else {
-                        emit_error_and_hide_overlay(&app, format!("停止录音失败: {}", e)).await;
-                    }
-                    None
-                }
-            }
+        let rec_result = if let Some(ref mut rec) = *recorder_guard {
+            Some(rec.stop_recording_to_memory())
         } else {
             None
+        };
+        // Drop guard before any .await
+        drop(recorder_guard);
+
+        match rec_result {
+            Some(Ok(data)) => Some(data),
+            Some(Err(e)) => {
+                if is_audio_skip_error(&e) {
+                    tracing::info!("音频已跳过: {}", e);
+                    hide_overlay_silently(&app).await;
+                } else {
+                    emit_error_and_hide_overlay(&app, format!("停止录音失败: {}", e)).await;
+                }
+                None
+            }
+            None => None,
         }
     };
 
@@ -3879,7 +3909,7 @@ async fn handle_transcription_result(
 
             // 如果只有原文（无 LLM 结果），直接插入原文
             if items.len() == 1 {
-                let mut inserter = { text_inserter.lock().unwrap_or_else(|e| e.into_inner()).take() };
+                let inserter = { text_inserter.lock().unwrap_or_else(|e| e.into_inner()).take() };
                 // Use TextInserterGuard to ensure the inserter is returned even on panic
                 let mut _guard = TextInserterGuard {
                     inserter,
@@ -4237,7 +4267,8 @@ async fn finish_locked_recording(app_handle: AppHandle) -> Result<String, String
 async fn cancel_locked_recording(app_handle: AppHandle) -> Result<String, String> {
     tracing::info!("用户点击取消按钮，取消锁定录音");
 
-    let state = app_handle.state::<AppState>();
+    let app_handle2 = app_handle.clone();
+    let state = app_handle2.state::<AppState>();
 
     if !state.is_recording_locked.load(Ordering::SeqCst) {
         return Err("未处于锁定录音状态".to_string());

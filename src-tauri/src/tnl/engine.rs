@@ -236,7 +236,7 @@ impl TnlEngine {
         applied.extend(symbol_replacements);
         applied.extend(pinyin_replacements);
         applied.extend(hyphen_replacements);
-        applied.extend(phonetic_replacements);
+        applied.extend(phonetic_replacements.clone());
 
         let mut diagnostic_candidates: Vec<TnlCandidate> = applied
             .iter()
