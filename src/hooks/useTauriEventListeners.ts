@@ -186,7 +186,6 @@ export function useTauriEventListeners({
 
           const llmConfig = llmConfigRef.current;
           const mode = (result.mode as "normal" | "assistant") || null;
-          const enablePostProcess = enablePostProcessRef?.current ?? false;
           const enableDictionaryEnhancement = enableDictionaryEnhancementRef?.current ?? false;
 
           // presetNames 閫昏緫锛?
