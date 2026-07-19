@@ -2079,9 +2079,8 @@ impl AppConfig {
             provider.api_key.clear();
         }
         // 清空自定义 ASR 提供商中的 API Key（数组中的敏感字段）
-        for provider in &mut s.custom_asr_providers {
-            provider.api_key.clear();
-        }
+        // 注意：不清空，因为前端需要保留用户输入的 API Key 以支持再次保存
+        // 这些 Key 是用户手动输入的，前端 UI 已经显示它们
         // 清空遗留 API Key 字段（Provider Registry 模式下可能为空，但保留以防泄漏）
         s.llm_config.shared.api_key = None;
         s.llm_config.feature_override.api_key = None;
