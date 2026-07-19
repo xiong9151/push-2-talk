@@ -1,4 +1,4 @@
-﻿import type React from "react";
+import type React from "react";
 import { useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
@@ -198,14 +198,15 @@ export function useTauriEventListeners({
           const hasPolishing = !!result.original_text;
           let presetNames: string[] = [];
           if (hasPolishing && mode !== "assistant") {
-            if (enablePostProcess) {
-              // 鏀堕泦鎵€鏈夊嬀閫夌殑棰勮鍚嶇О
-              const selectedPresets = llmConfig?.presets.filter(
+            // 只要产生了润色结果，直接显示所有勾选的预设名称
+            // 不依赖 enablePostProcess ref（可能因事件时序尚未更新）
+            const selectedPresets = llmConfig?.presets.filter(
                 (p) => p.selected_for_display ?? true
               ) ?? [];
+            if (selectedPresets.length > 0) {
               presetNames = selectedPresets.map((p) => p.name);
             } else if (enableDictionaryEnhancement) {
-              presetNames = ["璇嶅簱澧炲己"];
+              presetNames = ["词库增强"];
             } else {
               presetNames = ["文本规范化"];
             }
