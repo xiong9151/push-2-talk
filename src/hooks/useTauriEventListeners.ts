@@ -30,7 +30,6 @@ type UnlistenFn = () => void;
 
 export type UseTauriEventListenersParams = {
   llmConfigRef: React.RefObject<LlmConfig>;
-  enablePostProcessRef?: React.RefObject<boolean>;
   enableDictionaryEnhancementRef?: React.RefObject<boolean>;
   setActivePresetNames?: React.Dispatch<React.SetStateAction<string[]>>;
 
@@ -73,7 +72,6 @@ export type UseTauriEventListenersParams = {
 
 export function useTauriEventListeners({
   llmConfigRef,
-  enablePostProcessRef,
   enableDictionaryEnhancementRef,
   setActivePresetNames,
   setStatus,

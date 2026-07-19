@@ -284,10 +284,6 @@ function App() {
   useEffect(() => {
     llmConfigRef.current = llmConfig;
   }, [llmConfig]);
-  const enablePostProcessRef = useRef(enablePostProcess);
-  useEffect(() => {
-    enablePostProcessRef.current = enablePostProcess;
-  }, [enablePostProcess]);
   const enableDictionaryEnhancementRef = useRef(enableDictionaryEnhancement);
   useEffect(() => {
     enableDictionaryEnhancementRef.current = enableDictionaryEnhancement;
@@ -300,7 +296,6 @@ function App() {
   }, [showToast]);
   useTauriEventListeners({
     llmConfigRef,
-    enablePostProcessRef,
     enableDictionaryEnhancementRef,
     setActivePresetNames,
     setStatus,
