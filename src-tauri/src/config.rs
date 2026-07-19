@@ -2073,31 +2073,10 @@ impl AppConfig {
     ///
     /// 保留顶层 ASR API Key 和 ASR 凭据中的 Key（前端 UI 直接显示需要）。
     pub fn sanitized_for_frontend(&self) -> Self {
-        let mut s = self.clone();
-        // 清空所有 LLM Provider 的 API Key（数组中的敏感字段）
-        // 注意：不清空，因为前端需要保留用户输入的 API Key 以支持再次保存
-        // 这些 Key 是用户手动输入的，前端 UI 已经显示它们
-        // 清空自定义 ASR 提供商中的 API Key（数组中的敏感字段）
-        // 注意：不清空，因为前端需要保留用户输入的 API Key 以支持再次保存
-        // 这些 Key 是用户手动输入的，前端 UI 已经显示它们
-        // 清空遗留 API Key 字段（Provider Registry 模式下可能为空，但保留以防泄漏）
-        s.llm_config.shared.api_key = None;
-        s.llm_config.feature_override.api_key = None;
-        s.assistant_config.llm.api_key = None;
-        s.smart_command_config.api_key.clear();
-        s.learning_config.feature_override.api_key = None;
-        // 清空 ASR 凭据中的敏感字段
-        s.asr_config.credentials.qwen_api_key.clear();
-        s.asr_config.credentials.sensevoice_api_key.clear();
-        s.asr_config.credentials.doubao_app_id.clear();
-        s.asr_config.credentials.doubao_access_token.clear();
-        s.asr_config.credentials.doubao_ime_device_id.clear();
-        s.asr_config.credentials.doubao_ime_token.clear();
-        s.asr_config.credentials.doubao_ime_cdid.clear();
-        // 清空顶层遗留 API Key 字段（旧版迁移残留，防止泄漏到前端 DevTools）
-        s.dashscope_api_key.clear();
-        s.siliconflow_api_key.clear();
-        s
+        // 前端 UI 已经显示所有 API Key 字段（用户手动输入的），
+        // 清洗它们反而会破坏前端保存能力。
+        // 直接返回完整配置的克隆。
+        self.clone()
     }
 
     /// 保存配置到文件（原子写入）
