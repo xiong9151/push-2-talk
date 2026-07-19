@@ -238,9 +238,8 @@ export function RightPanel({
               variant="orange"
             />
           </div>
-          {enablePostProcess && (
-            /* 多结果选择区域，始终显示开关 */
-            <div className="space-y-2">
+          {/* 多结果选择区域，始终显示（不依赖 enablePostProcess） */}
+          <div className="space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-[10px] font-bold text-stone-500">
                   多结果选择
