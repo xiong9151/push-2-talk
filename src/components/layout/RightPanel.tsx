@@ -297,7 +297,6 @@ export function RightPanel({
                 </select>
               )}
             </div>
-          )}
           {/* 虚线分割线 */}
           <div className="my-3 border-t border-dashed border-stone-200" />
           <div className="flex items-center justify-between">
