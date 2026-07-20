@@ -351,6 +351,7 @@ export default function OverlayWindow() {
   const [liveTranscript, setLiveTranscript] = useState("");
   const [enableLiveTranscript, setEnableLiveTranscript] = useState(false);
   const [presetResults, setPresetResults] = useState<PresetProgress[]>([]);
+  const [hasSelectedResult, setHasSelectedResult] = useState(false); // 用户是否已选择了一个结果
 
   const { level: audioLevel, time: animationTime } = useSmoothAudioLevel(status === "recording");
 
@@ -371,6 +372,8 @@ export default function OverlayWindow() {
 
   // 选择预设结果（渐进式结果）
   const handleSelectPresetResult = async (index: number) => {
+    if (hasSelectedResult) return; // 防重复
+    setHasSelectedResult(true);
     setIsSubmitting(true);
     try {
       // 取消其他未完成的任务
@@ -382,8 +385,10 @@ export default function OverlayWindow() {
       // 重置状态
       setStatus("recording");
       setPresetResults([]);
+      setHasSelectedResult(false);
     } catch (e) {
       console.error("选择预设结果失败:", e);
+      setHasSelectedResult(false);
     }
     setIsSubmitting(false);
   };
@@ -472,6 +477,7 @@ export default function OverlayWindow() {
         setSelectedIndex(0);
         setLiveTranscript("");
         setPresetResults([]);
+        setHasSelectedResult(false);
       }))) return;
 
       if (!(await registerListener("recording_locked", () => {
@@ -489,9 +495,9 @@ export default function OverlayWindow() {
       }))) return;
 
       if (!(await registerListener("transcription_complete", () => {
-        // 如果已经是 results 状态，不要覆盖
-        // 否则重置
-        if (statusRef.current !== "results") {
+        // 如果已经通过 preset_progress 显示了结果，不覆盖
+        // 如果用户已选择了一个结果，不重置
+        if (statusRef.current !== "results" && !hasSelectedResult) {
           setStatus("recording");
           setIsLocked(false);
           setIsSubmitting(false);
@@ -528,6 +534,8 @@ export default function OverlayWindow() {
       if (!(await registerListener("preset_progress", (event) => {
         const payload = event.payload as PresetProgress;
         console.log("[OverlayWindow] 预设进度:", payload);
+        // 用户已选择结果，忽略后续事件
+        if (hasSelectedResult) return;
         setPresetResults(prev => {
           const results = [...prev];
           const idx = payload.index;
