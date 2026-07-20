@@ -19,7 +19,7 @@ interface TranscriptionResultItem {
 interface PresetProgress {
   index: number;
   name: string;
-  status: "processing" | "done" | "error";
+  status: "processing" | "done" | "error" | "pending";
   text?: string | null;
 }
 
