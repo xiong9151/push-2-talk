@@ -376,16 +376,15 @@ export default function OverlayWindow() {
     setHasSelectedResult(true);
     setIsSubmitting(true);
     try {
-      // 取消其他未完成的任务
+      // 取消其他未完成的任务（它们发射的 cancelled 事件会被 hasSelectedResult 阻挡）
       await invoke("cancel_pending_presets");
       // 选中该结果
       if (presetResults[index].text) {
         await invoke("select_transcription_result", { text: presetResults[index].text });
       }
-      // 重置状态
+      // 重置状态（hasSelectedResult 保持 true 直到下次录音开始，防止后续事件干扰）
       setStatus("recording");
       setPresetResults([]);
-      setHasSelectedResult(false);
     } catch (e) {
       console.error("选择预设结果失败:", e);
       setHasSelectedResult(false);
