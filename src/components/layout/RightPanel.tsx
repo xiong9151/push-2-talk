@@ -89,7 +89,7 @@ export function RightPanel({
   }
 
   // 多结果选择模式：显示多选预设复选框
-  const resultSelectionEnabled = llmConfig.presets.some((p) => p.selected_for_display);
+  const resultSelectionEnabled = llmConfig.presets.length > 0 && llmConfig.presets.some((p) => p.selected_for_display ?? false);
 
   // 单选预设切换（传统模式）
   const handleSinglePresetChange = (id: string) => {
