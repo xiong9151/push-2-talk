@@ -275,10 +275,18 @@ impl NormalPipeline {
 
         let filtered: Vec<_> = presets.iter().filter(|p| p.selected_for_display).collect();
 
-        // 先发射所有预设的"处理中"状态
+        // 先发射原始文本作为第一个可选项（index=0）
+        let _ = app.emit("preset_progress", serde_json::json!({
+            "index": 0,
+            "name": "原始文本",
+            "status": "done",
+            "text": text
+        }));
+
+        // 先发射所有预设的"处理中"状态（index 从 1 开始）
         for (i, preset) in filtered.iter().enumerate() {
             let _ = app.emit("preset_progress", serde_json::json!({
-                "index": i,
+                "index": i + 1,
                 "name": preset.name,
                 "status": "processing"
             }));
@@ -297,7 +305,7 @@ impl NormalPipeline {
                 // 检查是否已被取消
                 if cancel.load(Ordering::Relaxed) {
                     let _ = app_clone.emit("preset_progress", serde_json::json!({
-                        "index": i,
+                        "index": i + 1,
                         "name": pc.name,
                         "status": "cancelled"
                     }));
@@ -306,7 +314,7 @@ impl NormalPipeline {
                 let result = p.polish_with_preset(&t, &d, enable_post_process, enable_dictionary_enhancement, &pc).await;
                 // 立即发射结果事件
                 let _ = app_clone.emit("preset_progress", serde_json::json!({
-                    "index": i,
+                    "index": i + 1,
                     "name": pc.name,
                     "status": if result.is_ok() { "done" } else { "error" },
                     "text": result.as_ref().ok().cloned().unwrap_or_default()
