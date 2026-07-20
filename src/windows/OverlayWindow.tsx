@@ -19,7 +19,7 @@ interface TranscriptionResultItem {
 interface PresetProgress {
   index: number;
   name: string;
-  status: "processing" | "done" | "error" | "pending";
+  status: "processing" | "done" | "error" | "pending" | "cancelled";
   text?: string | null;
 }
 
@@ -274,48 +274,65 @@ function ResultList({
   );
 }
 
-// 预设进度列表组件
+// 预设进度列表组件（复用 ResultList 样式）
 function PresetProgressList({
   items,
+  selectedIndex,
   onSelect,
+  onConfirm,
   disabled
 }: {
   items: PresetProgress[];
+  selectedIndex: number;
   onSelect: (index: number) => void;
+  onConfirm: (index: number) => void;
   disabled: boolean;
 }) {
+  const listRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!listRef.current) return;
+    const selectedEl = listRef.current.querySelector('.result-item-selected');
+    if (selectedEl) {
+      selectedEl.scrollIntoView({ block: 'nearest' });
+    }
+  }, [selectedIndex]);
+
   return (
-    <div className="preset-progress-list">
-      <div className="result-list-header">预设处理进度</div>
-      {items.map((item) => (
+    <div className="result-list" ref={listRef}>
+      <div className="result-list-header">选择处理结果</div>
+      {items.map((item, index) => (
         <div
-          key={item.index}
-          className={`preset-progress-item preset-progress-${item.status} ${disabled ? 'opacity-50' : ''}`}
+          key={index}
+          className={`result-item ${index === selectedIndex ? 'result-item-selected' : ''} ${
+            item.status === "processing" ? 'result-item-loading' : ''
+          }`}
           onClick={() => {
             if (item.status === "done" && !disabled) {
-              onSelect(item.index);
+              onConfirm(index);
             }
           }}
-          style={{ cursor: item.status === "done" && !disabled ? 'pointer' : 'default' }}
+          onMouseEnter={() => {
+            if (item.status === "done") onSelect(index);
+          }}
+          style={{ opacity: item.status === "pending" ? 0.4 : 1 }}
         >
-          <div className="preset-progress-name">{item.name || `预设 ${item.index + 1}`}</div>
-          {item.status === "processing" && (
-            <div className="preset-progress-status">
-              <div className="preset-progress-spinner" />
-              <span>正在处理...</span>
-            </div>
-          )}
-          {item.status === "done" && item.text && (
-            <div className="preset-progress-text">{item.text}</div>
-          )}
-          {item.status === "error" && (
-            <div className="preset-progress-error">处理失败</div>
-          )}
-          {item.status === "pending" && (
-            <div className="preset-progress-pending">等待中...</div>
-          )}
+          <div className="result-item-label">
+            {item.name || `预设 ${index + 1}`}
+            {item.status === "processing" && <span className="result-item-spinner" />}
+          </div>
+          <div className="result-item-text">
+            {item.status === "done" && item.text ? item.text : ''}
+            {item.status === "processing" && <span className="result-item-processing-text">正在处理...</span>}
+            {item.status === "pending" && <span className="result-item-pending-text">等待中...</span>}
+            {item.status === "error" && <span className="result-item-error-text">处理失败</span>}
+            {item.status === "cancelled" && <span className="result-item-error-text">已取消</span>}
+          </div>
         </div>
       ))}
+      <div className="result-list-hint">
+        Tab 选择 · Enter 确认 · Esc 取消
+      </div>
     </div>
   );
 }
@@ -526,6 +543,10 @@ export default function OverlayWindow() {
           };
           return results;
         });
+        // 第一个预设进度到来时，立即切换到结果模式
+        if (statusRef.current !== "results") {
+          setStatus("results");
+        }
       }))) return;
     };
 
@@ -622,11 +643,13 @@ export default function OverlayWindow() {
     >
       {status === "results" ? (
         <div className={`overlay-pill overlay-pill-results`}>
-          {/* 如果有渐进式结果（预设处理中），显示进度面板；否则显示传统结果列表 */}
+          {/* 渐进式结果面板：使用与 ResultList 完全相同的样式 */}
           {presetResults.length > 0 ? (
             <PresetProgressList
               items={presetResults}
-              onSelect={handleSelectPresetResult}
+              selectedIndex={selectedIndex}
+              onSelect={setSelectedIndex}
+              onConfirm={handleSelectPresetResult}
               disabled={isSubmitting}
             />
           ) : (
