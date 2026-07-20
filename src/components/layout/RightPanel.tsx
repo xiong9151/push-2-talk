@@ -92,10 +92,6 @@ export function RightPanel({
   // 优先从 enableResultSelection 配置判断，其次从 presets 的 selected_for_display 推导
   const resultSelectionEnabled = llmConfig.presets.length > 0 && llmConfig.presets.some((p) => p.selected_for_display === true);
 
-  // 单选预设切换（传统模式）
-  const handleSinglePresetChange = (id: string) => {
-    setLlmConfig((prev) => ({ ...prev, active_preset_id: id }));
-  };
 
   const handleTogglePresetAndSave = async (presetId: string) => {
     // 同时更新 React state 和持久化
@@ -147,13 +143,7 @@ export function RightPanel({
     }
   };
 
-  const handleSinglePresetAndSave = async (id: string) => {
-    handleSinglePresetChange(id);
-    await saveImmediately({
-      llmConfig: { ...llmConfig, active_preset_id: id },
-    });
-  };
-
+  
   return (
     <aside className="flex shrink-0 w-80 h-full min-h-0 bg-[var(--paper)] border-l border-[var(--stone)] flex-col p-5 gap-5 overflow-y-auto custom-scroll font-sans">
       {/* ASR 引擎选择 */}
