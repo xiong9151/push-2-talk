@@ -153,6 +153,8 @@ struct AppState {
     is_assistant_processing: Arc<AtomicBool>,
     /// 多结果选择：插入文本时恢复焦点用到的目标窗口句柄
     target_window_for_insert: Arc<Mutex<Option<isize>>>,
+    /// 多结果预设取消标志
+    cancel_presets: Arc<AtomicBool>,
 }
 
 // ================== RAII Guards ==================
@@ -3875,6 +3877,10 @@ async fn handle_transcription_result(
     let llm_config = config.llm_config.clone();
     let enable_result_selection = config.enable_result_selection;
 
+    // 每次转录开始时重置取消标志
+    state.cancel_presets.store(false, Ordering::SeqCst);
+    let cancel_flag = Arc::clone(&state.cancel_presets);
+
     // 听写模式：只使用 NormalPipeline
     let pipeline = NormalPipeline::new();
     let pipeline_result = pipeline
@@ -3891,6 +3897,7 @@ async fn handle_transcription_result(
             tnl_enabled,
             Some(&llm_config),
             enable_result_selection,
+            cancel_flag,
         )
         .await;
 
@@ -4155,6 +4162,14 @@ async fn cancel_transcription(app_handle: AppHandle) -> Result<String, String> {
     let _ = app_handle.emit("transcription_cancelled", ());
 
     Ok("已取消转录".to_string())
+}
+
+/// 取消正在进行的多预设 LLM 处理
+#[tauri::command]
+async fn cancel_pending_presets(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    state.cancel_presets.store(true, Ordering::SeqCst);
+    tracing::info!("已取消所有待处理的预设任务");
+    Ok("已取消".to_string())
 }
 
 /// 完成锁定录音（松手模式）
@@ -5468,6 +5483,7 @@ pub fn run() {
                 conversation_session: Arc::new(Mutex::new(None)),
                 is_assistant_processing: Arc::new(AtomicBool::new(false)),
                 target_window_for_insert: Arc::new(Mutex::new(None)),
+                cancel_presets: Arc::new(AtomicBool::new(false)),
             };
 
             // 预初始化音频播放器，消除首次按键提示音延迟
@@ -5746,6 +5762,7 @@ pub fn run() {
             dismiss_conversation,
             send_text_question,
             select_transcription_result,
+            cancel_pending_presets,
             show_notification_window,
             test_llm_provider,
             test_custom_asr,

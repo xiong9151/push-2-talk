@@ -7,6 +7,9 @@
 // 设计原则：Pipeline 不持有锁，所有依赖通过参数传入
 
 use anyhow::Result;
+use serde_json;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
 
@@ -48,6 +51,7 @@ impl NormalPipeline {
         tnl_enabled: bool,
         llm_config: Option<&crate::config::LlmConfig>,
         enable_result_selection: bool,
+        cancel_flag: Arc<AtomicBool>,
     ) -> Result<(PipelineResult, Vec<TranscriptionResultItem>)> {
         // 1. 解包 ASR 结果
         let asr_text = asr_result?;
@@ -93,6 +97,7 @@ impl NormalPipeline {
             &text,
             llm_config,
             enable_result_selection,
+            cancel_flag,
         )
         .await;
         let combined_llm_time_ms = Self::sum_llm_time(candidate_llm_time_ms, llm_time_ms);
@@ -218,6 +223,7 @@ impl NormalPipeline {
         text: &str,
         llm_config: Option<&crate::config::LlmConfig>,
         enable_result_selection: bool,
+        cancel_flag: Arc<AtomicBool>,
     ) -> (Vec<TranscriptionResultItem>, String, Option<String>, Option<u64>) {
         // 至少包含原文作为第一项
         let mut items: Vec<TranscriptionResultItem> = vec![TranscriptionResultItem {
@@ -247,7 +253,7 @@ impl NormalPipeline {
             && presets.iter().any(|p| p.selected_for_display);
 
         if do_multi {
-            Self::run_multi_presets(app, processor_inner, text, dictionary, enable_post_process, enable_dictionary_enhancement, &presets, &mut items).await
+            Self::run_multi_presets(app, processor_inner, text, dictionary, enable_post_process, enable_dictionary_enhancement, &presets, &mut items, cancel_flag).await
         } else {
             Self::run_single_preset(app, processor_inner, text, dictionary, enable_post_process, enable_dictionary_enhancement, &mut items).await
         }
@@ -263,21 +269,49 @@ impl NormalPipeline {
         enable_dictionary_enhancement: bool,
         presets: &[crate::config::LlmPreset],
         items: &mut Vec<TranscriptionResultItem>,
+        cancel_flag: Arc<AtomicBool>,
     ) -> (Vec<TranscriptionResultItem>, String, Option<String>, Option<u64>) {
         let _ = app.emit("post_processing", "polishing");
 
         let filtered: Vec<_> = presets.iter().filter(|p| p.selected_for_display).collect();
-        let mut handles = Vec::new();
 
-        for preset in &filtered {
+        // 先发射所有预设的"处理中"状态
+        for (i, preset) in filtered.iter().enumerate() {
+            let _ = app.emit("preset_progress", serde_json::json!({
+                "index": i,
+                "name": preset.name,
+                "status": "processing"
+            }));
+        }
+
+        let mut handles = Vec::new();
+        for (i, preset) in filtered.iter().enumerate() {
             let p = processor.clone();
             let t = text.to_string();
             let d = dictionary.to_vec();
             let pc = (*preset).clone();
+            let app_clone = app.clone();
+            let cancel = Arc::clone(&cancel_flag);
             handles.push(tokio::spawn(async move {
                 let start = Instant::now();
+                // 检查是否已被取消
+                if cancel.load(Ordering::Relaxed) {
+                    let _ = app_clone.emit("preset_progress", serde_json::json!({
+                        "index": i,
+                        "name": pc.name,
+                        "status": "cancelled"
+                    }));
+                    return (pc, None, start.elapsed().as_millis() as u64);
+                }
                 let result = p.polish_with_preset(&t, &d, enable_post_process, enable_dictionary_enhancement, &pc).await;
-                (pc, result, start.elapsed().as_millis() as u64)
+                // 立即发射结果事件
+                let _ = app_clone.emit("preset_progress", serde_json::json!({
+                    "index": i,
+                    "name": pc.name,
+                    "status": if result.is_ok() { "done" } else { "error" },
+                    "text": result.as_ref().ok().cloned().unwrap_or_default()
+                }));
+                (pc, Some(result), start.elapsed().as_millis() as u64)
             }));
         }
 
@@ -286,7 +320,7 @@ impl NormalPipeline {
 
         for handle in handles {
             match handle.await {
-                Ok((preset, Ok(polished), elapsed)) => {
+                Ok((preset, Some(Ok(polished)), elapsed)) => {
                     total_llm_time += elapsed;
                     if first_success.is_none() {
                         first_success = Some(polished.clone());
@@ -297,8 +331,11 @@ impl NormalPipeline {
                         text: polished,
                     });
                 }
-                Ok((preset, Err(e), _)) => {
+                Ok((preset, Some(Err(e)), _)) => {
                     tracing::warn!("预设 '{}' 处理失败: {}", preset.name, e);
+                }
+                Ok((preset, None, _)) => {
+                    tracing::info!("预设 '{}' 已被取消", preset.name);
                 }
                 Err(e) => {
                     tracing::warn!("预设任务 panicked: {}", e);

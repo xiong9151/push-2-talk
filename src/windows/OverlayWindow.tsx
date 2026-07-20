@@ -15,6 +15,14 @@ interface TranscriptionResultItem {
   text: string;
 }
 
+// 预设进度项
+interface PresetProgress {
+  index: number;
+  name: string;
+  status: "processing" | "done" | "error";
+  text?: string | null;
+}
+
 // 状态类型
 type OverlayStatus = "recording" | "transcribing" | "results";
 
@@ -266,6 +274,52 @@ function ResultList({
   );
 }
 
+// 预设进度列表组件
+function PresetProgressList({
+  items,
+  onSelect,
+  disabled
+}: {
+  items: PresetProgress[];
+  onSelect: (index: number) => void;
+  disabled: boolean;
+}) {
+  return (
+    <div className="preset-progress-list">
+      <div className="result-list-header">预设处理进度</div>
+      {items.map((item) => (
+        <div
+          key={item.index}
+          className={`preset-progress-item preset-progress-${item.status} ${disabled ? 'opacity-50' : ''}`}
+          onClick={() => {
+            if (item.status === "done" && !disabled) {
+              onSelect(item.index);
+            }
+          }}
+          style={{ cursor: item.status === "done" && !disabled ? 'pointer' : 'default' }}
+        >
+          <div className="preset-progress-name">{item.name || `预设 ${item.index + 1}`}</div>
+          {item.status === "processing" && (
+            <div className="preset-progress-status">
+              <div className="preset-progress-spinner" />
+              <span>正在处理...</span>
+            </div>
+          )}
+          {item.status === "done" && item.text && (
+            <div className="preset-progress-text">{item.text}</div>
+          )}
+          {item.status === "error" && (
+            <div className="preset-progress-error">处理失败</div>
+          )}
+          {item.status === "pending" && (
+            <div className="preset-progress-pending">等待中...</div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // 主悬浮窗组件
 export default function OverlayWindow() {
   const [status, setStatus] = useState<OverlayStatus>("recording");
@@ -279,6 +333,7 @@ export default function OverlayWindow() {
   const [selectedIndex, setSelectedIndex] = useState(0);
   const [liveTranscript, setLiveTranscript] = useState("");
   const [enableLiveTranscript, setEnableLiveTranscript] = useState(false);
+  const [presetResults, setPresetResults] = useState<PresetProgress[]>([]);
 
   const { level: audioLevel, time: animationTime } = useSmoothAudioLevel(status === "recording");
 
@@ -296,6 +351,25 @@ export default function OverlayWindow() {
     }
     setIsSubmitting(false);
   }, []);
+
+  // 选择预设结果（渐进式结果）
+  const handleSelectPresetResult = async (index: number) => {
+    setIsSubmitting(true);
+    try {
+      // 取消其他未完成的任务
+      await invoke("cancel_pending_presets");
+      // 选中该结果
+      if (presetResults[index].text) {
+        await invoke("select_transcription_result", { text: presetResults[index].text });
+      }
+      // 重置状态
+      setStatus("recording");
+      setPresetResults([]);
+    } catch (e) {
+      console.error("选择预设结果失败:", e);
+    }
+    setIsSubmitting(false);
+  };
 
   // Auto-focus window when entering results mode (for keyboard events)
   useEffect(() => {
@@ -380,6 +454,7 @@ export default function OverlayWindow() {
         setResultItems([]);
         setSelectedIndex(0);
         setLiveTranscript("");
+        setPresetResults([]);
       }))) return;
 
       if (!(await registerListener("recording_locked", () => {
@@ -431,6 +506,26 @@ export default function OverlayWindow() {
         const text = event.payload as string;
         console.log("[OverlayWindow] 实时转录:", text);
         setLiveTranscript(text);
+      }))) return;
+
+      if (!(await registerListener("preset_progress", (event) => {
+        const payload = event.payload as PresetProgress;
+        console.log("[OverlayWindow] 预设进度:", payload);
+        setPresetResults(prev => {
+          const results = [...prev];
+          const idx = payload.index;
+          // 确保数组长度足够
+          while (results.length <= idx) {
+            results.push({ index: results.length, name: "", status: "pending", text: null });
+          }
+          results[idx] = {
+            index: payload.index,
+            name: payload.name,
+            status: payload.status,
+            text: payload.text || null,
+          };
+          return results;
+        });
       }))) return;
     };
 
@@ -527,12 +622,21 @@ export default function OverlayWindow() {
     >
       {status === "results" ? (
         <div className={`overlay-pill overlay-pill-results`}>
-          <ResultList
-            items={resultItems}
-            selectedIndex={selectedIndex}
-            onSelect={setSelectedIndex}
-            onConfirm={confirmResult}
-          />
+          {/* 如果有渐进式结果（预设处理中），显示进度面板；否则显示传统结果列表 */}
+          {presetResults.length > 0 ? (
+            <PresetProgressList
+              items={presetResults}
+              onSelect={handleSelectPresetResult}
+              disabled={isSubmitting}
+            />
+          ) : (
+            <ResultList
+              items={resultItems}
+              selectedIndex={selectedIndex}
+              onSelect={setSelectedIndex}
+              onConfirm={confirmResult}
+            />
+          )}
         </div>
       ) : (
         <div className={`overlay-pill ${isLocked ? 'overlay-pill-locked' : ''}`}
