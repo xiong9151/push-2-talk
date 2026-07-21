@@ -351,7 +351,8 @@ export default function OverlayWindow() {
   const [liveTranscript, setLiveTranscript] = useState("");
   const [enableLiveTranscript, setEnableLiveTranscript] = useState(false);
   const [presetResults, setPresetResults] = useState<PresetProgress[]>([]);
-  const [hasSelectedResult, setHasSelectedResult] = useState(false); // 用户是否已选择了一个结果
+  const hasSelectedResultRef = useRef(false); // 用户是否已选择了一个结果（用 ref 确保闭包可见）
+  const hasEnteredResultsRef = useRef(false); // 是否已进入 results 模式（防止重复弹出）
 
   const { level: audioLevel, time: animationTime } = useSmoothAudioLevel(status === "recording");
 
@@ -372,22 +373,23 @@ export default function OverlayWindow() {
 
   // 选择预设结果（渐进式结果）
   const handleSelectPresetResult = async (index: number) => {
-    if (hasSelectedResult) return; // 防重复
-    setHasSelectedResult(true);
+    if (hasSelectedResultRef.current) return; // 防重复
+    hasSelectedResultRef.current = true;
     setIsSubmitting(true);
     try {
-      // 取消其他未完成的任务（它们发射的 cancelled 事件会被 hasSelectedResult 阻挡）
+      // 取消其他未完成的任务
       await invoke("cancel_pending_presets");
       // 选中该结果
       if (presetResults[index].text) {
         await invoke("select_transcription_result", { text: presetResults[index].text });
       }
-      // 重置状态（hasSelectedResult 保持 true 直到下次录音开始，防止后续事件干扰）
+      // 重置状态
       setStatus("recording");
       setPresetResults([]);
+      hasEnteredResultsRef.current = false;
     } catch (e) {
       console.error("选择预设结果失败:", e);
-      setHasSelectedResult(false);
+      hasSelectedResultRef.current = false;
     }
     setIsSubmitting(false);
   };
@@ -476,7 +478,8 @@ export default function OverlayWindow() {
         setSelectedIndex(0);
         setLiveTranscript("");
         setPresetResults([]);
-        setHasSelectedResult(false);
+        hasSelectedResultRef.current = false;
+        hasEnteredResultsRef.current = false;
       }))) return;
 
       if (!(await registerListener("recording_locked", () => {
@@ -496,7 +499,8 @@ export default function OverlayWindow() {
       if (!(await registerListener("transcription_complete", () => {
         // 如果已经通过 preset_progress 显示了结果，不覆盖
         // 如果用户已选择了一个结果，不重置
-        if (statusRef.current !== "results" && !hasSelectedResult) {
+        // 否则重置
+        if (!hasEnteredResultsRef.current && !hasSelectedResultRef.current) {
           setStatus("recording");
           setIsLocked(false);
           setIsSubmitting(false);
@@ -516,6 +520,8 @@ export default function OverlayWindow() {
       }))) return;
 
       if (!(await registerListener("transcription_results", (event) => {
+        // 如果已经通过 preset_progress 显示了结果，不覆盖
+        if (hasEnteredResultsRef.current) return;
         const items = event.payload as TranscriptionResultItem[];
         console.log("[OverlayWindow] 收到转录结果列表:", items);
         setResultItems(items);
@@ -532,9 +538,8 @@ export default function OverlayWindow() {
 
       if (!(await registerListener("preset_progress", (event) => {
         const payload = event.payload as PresetProgress;
-        console.log("[OverlayWindow] 预设进度:", payload);
         // 用户已选择结果，忽略后续事件
-        if (hasSelectedResult) return;
+        if (hasSelectedResultRef.current) return;
         setPresetResults(prev => {
           const results = [...prev];
           const idx = payload.index;
@@ -550,8 +555,9 @@ export default function OverlayWindow() {
           };
           return results;
         });
-        // 第一个预设进度到来时，立即切换到结果模式
-        if (statusRef.current !== "results") {
+        // 进入结果模式（仅第一次）
+        if (!hasEnteredResultsRef.current) {
+          hasEnteredResultsRef.current = true;
           setStatus("results");
         }
       }))) return;
