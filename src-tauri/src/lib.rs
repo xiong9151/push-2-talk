@@ -3958,9 +3958,13 @@ async fn handle_transcription_result(
                 // 保存 target_hwnd 用于后续文本插入时的焦点恢复
                 let mut hwnd_guard = state.target_window_for_insert.lock().unwrap_or_else(|e| e.into_inner());
                 *hwnd_guard = target_hwnd;
-                // 显示悬浮窗展示结果列表
-                if let Some(overlay) = app.get_webview_window("overlay") {
-                    let _ = overlay.show();
+                // 在预设进度模式下，悬浮窗已通过 preset_progress 事件显示
+                // 无需再次调用 overlay.show()，否则会导致闪烁
+                // 仅在非预设进度模式（传统多结果）下需要显示
+                if !enable_result_selection {
+                    if let Some(overlay) = app.get_webview_window("overlay") {
+                        let _ = overlay.show();
+                    }
                 }
             }
 
