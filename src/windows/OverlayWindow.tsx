@@ -648,27 +648,25 @@ export default function OverlayWindow() {
   return (
     <div
       className={`overlay-root ${theme === "dark" ? "theme-dark" : "theme-light"}`}
-      style={status === "transcribing" ? { pointerEvents: 'none' } : undefined}
     >
-      {status === "results" ? (
+      {(status === "results" || status === "transcribing") && presetResults.length > 0 ? (
         <div className={`overlay-pill overlay-pill-results`}>
-          {/* 渐进式结果面板：使用与 ResultList 完全相同的样式 */}
-          {presetResults.length > 0 ? (
-            <PresetProgressList
-              items={presetResults}
-              selectedIndex={selectedIndex}
-              onSelect={setSelectedIndex}
-              onConfirm={handleSelectPresetResult}
-              disabled={isSubmitting}
-            />
-          ) : (
-            <ResultList
-              items={resultItems}
-              selectedIndex={selectedIndex}
-              onSelect={setSelectedIndex}
-              onConfirm={confirmResult}
-            />
-          )}
+          <PresetProgressList
+            items={presetResults}
+            selectedIndex={selectedIndex}
+            onSelect={setSelectedIndex}
+            onConfirm={handleSelectPresetResult}
+            disabled={isSubmitting}
+          />
+        </div>
+      ) : status === "results" ? (
+        <div className={`overlay-pill overlay-pill-results`}>
+          <ResultList
+            items={resultItems}
+            selectedIndex={selectedIndex}
+            onSelect={setSelectedIndex}
+            onConfirm={confirmResult}
+          />
         </div>
       ) : (
         <div className={`overlay-pill ${isLocked ? 'overlay-pill-locked' : ''}`}
