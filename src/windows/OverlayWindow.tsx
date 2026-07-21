@@ -383,10 +383,9 @@ export default function OverlayWindow() {
       if (presetResults[index].text) {
         await invoke("select_transcription_result", { text: presetResults[index].text });
       }
-      // 重置状态
+      // 重置状态（hasEnteredResultsRef 保持 true，防止后续 transcription_results 再弹出）
       setStatus("recording");
       setPresetResults([]);
-      hasEnteredResultsRef.current = false;
     } catch (e) {
       console.error("选择预设结果失败:", e);
       hasSelectedResultRef.current = false;
@@ -534,12 +533,13 @@ export default function OverlayWindow() {
 
       if (!(await registerListener("preset_progress", (event) => {
         const payload = event.payload as PresetProgress;
-        // 用户已选择结果，忽略后续事件
+        // 用户已选择结果，忽略后续所有事件
         if (hasSelectedResultRef.current) return;
         setPresetResults(prev => {
+          // 当用户已选择结果时（最新的 ref 值），不更新
+          if (hasSelectedResultRef.current) return prev;
           const results = [...prev];
           const idx = payload.index;
-          // 确保数组长度足够
           while (results.length <= idx) {
             results.push({ index: results.length, name: "", status: "pending", text: null });
           }
