@@ -383,7 +383,9 @@ export default function OverlayWindow() {
       if (presetResults[index].text) {
         await invoke("select_transcription_result", { text: presetResults[index].text });
       }
-      // 重置状态（hasEnteredResultsRef 保持 true，防止后续 transcription_results 再弹出）
+      // 隐藏悬浮窗（清除残留的胶囊）
+      await invoke("hide_overlay");
+      // 重置状态
       setStatus("recording");
       setPresetResults([]);
     } catch (e) {
