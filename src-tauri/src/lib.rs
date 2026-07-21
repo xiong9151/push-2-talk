@@ -3904,8 +3904,11 @@ async fn handle_transcription_result(
     // 处理管道结果
     match pipeline_result {
         Ok((result, items)) => {
-            // 先隐藏录音悬浮窗
-            hide_overlay_window(&app).await;
+            // 如果是多结果模式，不隐藏悬浮窗（preset_progress 已在实时更新）
+            // 如果是单结果模式，隐藏录音悬浮窗
+            if !enable_result_selection || items.len() <= 1 {
+                hide_overlay_window(&app).await;
+            }
 
             // 更新统计数据（后端全权负责）
             if let Some(start_time) = recording_start_instant.lock().unwrap_or_else(|e| e.into_inner()).take() {
