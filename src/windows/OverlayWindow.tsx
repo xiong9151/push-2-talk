@@ -497,14 +497,10 @@ export default function OverlayWindow() {
       }))) return;
 
       if (!(await registerListener("transcription_complete", () => {
-        // 如果已经通过 preset_progress 显示了结果，不覆盖
-        // 如果用户已选择了一个结果，不重置
-        // 否则重置
-        if (!hasEnteredResultsRef.current && !hasSelectedResultRef.current) {
-          setStatus("recording");
-          setIsLocked(false);
-          setIsSubmitting(false);
-        }
+        // 不再重置状态：如果有多预设结果，由 preset_progress 管理显示
+        // 如果无预设结果（传统模式），由 transcription_results 管理显示
+        // 如果用户已选择结果，isSubmitting 已设为 false
+        setIsSubmitting(false);
       }))) return;
 
       if (!(await registerListener("error", () => {
