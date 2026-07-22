@@ -103,7 +103,10 @@ impl NormalPipeline {
         let combined_llm_time_ms = Self::sum_llm_time(candidate_llm_time_ms, llm_time_ms);
 
         // 5. 插入前隐藏窗口并主动恢复焦点到目标应用
-        super::focus::hide_overlay_and_restore_focus(app, target_hwnd).await;
+        // 多结果模式不隐藏悬浮窗，由用户选择后处理
+        if !enable_result_selection {
+            super::focus::hide_overlay_and_restore_focus(app, target_hwnd).await;
+        }
 
         // 6. 触发学习观察（如果插入成功）
         if let Some(hwnd) = target_hwnd {

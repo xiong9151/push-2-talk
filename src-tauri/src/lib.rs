@@ -3904,9 +3904,10 @@ async fn handle_transcription_result(
     // 处理管道结果
     match pipeline_result {
         Ok((result, items)) => {
-            // 如果是多结果模式，不隐藏悬浮窗（preset_progress 已在实时更新）
+            // 如果是多结果模式，不隐藏悬浮窗（preset_progress 已在实时更新，或等待用户选择）
             // 如果是单结果模式，隐藏录音悬浮窗
-            if !enable_result_selection || items.len() <= 1 {
+            // 注意：多结果模式下即使 items 只有 1 个（只有原文），也不隐藏，给用户选择机会
+            if !enable_result_selection {
                 hide_overlay_window(&app).await;
             }
 
