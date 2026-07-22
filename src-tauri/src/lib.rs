@@ -1103,6 +1103,10 @@ async fn handle_recording_start(
 ) {
     tracing::info!("检测到快捷键按下");
 
+    // 新录音开始时重置取消标志，确保上一轮的取消不影响本轮
+    let state = app.state::<AppState>();
+    state.cancel_presets.store(false, Ordering::SeqCst);
+
     // 录音开始时：增加会话计数并静音其他应用
     if let Some(ref manager) = *audio_mute_manager.lock().unwrap_or_else(|e| e.into_inner()) {
         manager.begin_session();
