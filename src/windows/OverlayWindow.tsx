@@ -498,9 +498,13 @@ export default function OverlayWindow() {
       }))) return;
 
       if (!(await registerListener("transcription_complete", () => {
-        // 不再重置状态：如果有多预设结果，由 preset_progress 管理显示
-        // 如果无预设结果（传统模式），由 transcription_results 管理显示
-        // 如果用户已选择结果，isSubmitting 已设为 false
+        // 如果是预设进度模式（hasEnteredResultsRef 为 true），保持悬浮窗显示让用户选择
+        // 不重置 status，presetResults 保持内容
+        // 如果是传统模式，重置到 recording
+        if (!hasEnteredResultsRef.current) {
+          setStatus("recording");
+          setIsLocked(false);
+        }
         setIsSubmitting(false);
       }))) return;
 
@@ -651,7 +655,8 @@ export default function OverlayWindow() {
     <div
       className={`overlay-root ${theme === "dark" ? "theme-dark" : "theme-light"}`}
     >
-      {(status === "results" || status === "transcribing") && presetResults.length > 0 ? (
+      {/* 预设进度面板：只要有预设结果就显示，不依赖 status */}
+      {presetResults.length > 0 ? (
         <div className={`overlay-pill overlay-pill-results`}>
           <PresetProgressList
             items={presetResults}
