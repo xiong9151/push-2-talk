@@ -385,7 +385,9 @@ export default function OverlayWindow() {
       }
       // 隐藏悬浮窗（清除残留的胶囊）
       await invoke("hide_overlay");
-      // 重置状态
+      // 重置所有状态，供下一轮录音使用
+      hasSelectedResultRef.current = false;
+      hasEnteredResultsRef.current = false;
       setStatus("recording");
       setPresetResults([]);
     } catch (e) {
