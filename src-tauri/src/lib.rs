@@ -3943,7 +3943,9 @@ async fn handle_transcription_result(
             let _ = app.emit("transcription_results", &items);
 
             // 如果只有原文（无 LLM 结果），直接插入原文
-            if items.len() == 1 {
+            // 注意：多结果模式下（enable_result_selection=true），即使 items 只有 1 个
+            // 也不自动插入，因为用户可能期望看到选择面板
+            if items.len() == 1 && !enable_result_selection {
                 let inserter = { text_inserter.lock().unwrap_or_else(|e| e.into_inner()).take() };
                 // Use TextInserterGuard to ensure the inserter is returned even on panic
                 let mut _guard = TextInserterGuard {
