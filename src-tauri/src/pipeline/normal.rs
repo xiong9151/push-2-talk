@@ -52,6 +52,7 @@ impl NormalPipeline {
         llm_config: Option<&crate::config::LlmConfig>,
         enable_result_selection: bool,
         cancel_flag: Arc<AtomicBool>,
+        preset_gen: u64,
     ) -> Result<(PipelineResult, Vec<TranscriptionResultItem>)> {
         // 1. 解包 ASR 结果
         let asr_text = asr_result?;
@@ -98,6 +99,7 @@ impl NormalPipeline {
             llm_config,
             enable_result_selection,
             cancel_flag,
+            preset_gen,
         )
         .await;
         let combined_llm_time_ms = Self::sum_llm_time(candidate_llm_time_ms, llm_time_ms);
@@ -227,6 +229,7 @@ impl NormalPipeline {
         llm_config: Option<&crate::config::LlmConfig>,
         enable_result_selection: bool,
         cancel_flag: Arc<AtomicBool>,
+        preset_gen: u64,
     ) -> (Vec<TranscriptionResultItem>, String, Option<String>, Option<u64>) {
         // 至少包含原文作为第一项
         let mut items: Vec<TranscriptionResultItem> = vec![TranscriptionResultItem {
@@ -256,7 +259,7 @@ impl NormalPipeline {
             && presets.iter().any(|p| p.selected_for_display);
 
         if do_multi {
-            Self::run_multi_presets(app, processor_inner, text, dictionary, enable_post_process, enable_dictionary_enhancement, &presets, &mut items, cancel_flag).await
+            Self::run_multi_presets(app, processor_inner, text, dictionary, enable_post_process, enable_dictionary_enhancement, &presets, &mut items, cancel_flag, preset_gen).await
         } else {
             Self::run_single_preset(app, processor_inner, text, dictionary, enable_post_process, enable_dictionary_enhancement, &mut items).await
         }
@@ -273,6 +276,7 @@ impl NormalPipeline {
         presets: &[crate::config::LlmPreset],
         items: &mut Vec<TranscriptionResultItem>,
         cancel_flag: Arc<AtomicBool>,
+        preset_gen: u64,
     ) -> (Vec<TranscriptionResultItem>, String, Option<String>, Option<u64>) {
         let _ = app.emit("post_processing", "polishing");
 
@@ -303,18 +307,18 @@ impl NormalPipeline {
             let pc = (*preset).clone();
             let app_clone = app.clone();
             let cancel = Arc::clone(&cancel_flag);
+            let gen = preset_gen;
             handles.push(tokio::spawn(async move {
                 let start = Instant::now();
-                // 检查是否已被取消
+                // 检查是否已被取消或代际已过期（上一轮残留任务自动取消）
                 if cancel.load(Ordering::Relaxed) {
-                    let _ = app_clone.emit("preset_progress", serde_json::json!({
-                        "index": i + 1,
-                        "name": pc.name,
-                        "status": "cancelled"
-                    }));
                     return (pc, None, start.elapsed().as_millis() as u64);
                 }
                 let result = p.polish_with_preset(&t, &d, enable_post_process, enable_dictionary_enhancement, &pc).await;
+                // 任务完成后再次检查取消和代际，防止上一轮任务在新一轮中错误发射
+                if cancel.load(Ordering::Relaxed) {
+                    return (pc, None, start.elapsed().as_millis() as u64);
+                }
                 // 立即发射结果事件
                 let _ = app_clone.emit("preset_progress", serde_json::json!({
                     "index": i + 1,

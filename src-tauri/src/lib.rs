@@ -42,7 +42,7 @@ use text_inserter::TextInserter;
 use usage_stats::UsageStats;
 
 use base64::{engine::general_purpose, Engine as _};
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{
     menu::{CheckMenuItem, Menu, MenuItem, Submenu},
@@ -155,6 +155,10 @@ struct AppState {
     target_window_for_insert: Arc<Mutex<Option<isize>>>,
     /// 多结果预设取消标志
     cancel_presets: Arc<AtomicBool>,
+    /// 多结果预设代际计数器：每次录音时递增，用于区分新旧任务
+    preset_generation: Arc<AtomicU64>,
+    /// 多结果预设代际计数器：每次录音时递增，用于区分新旧任务
+    preset_generation: Arc<std::sync::atomic::AtomicU64>,
 }
 
 // ================== RAII Guards ==================
@@ -1103,9 +1107,10 @@ async fn handle_recording_start(
 ) {
     tracing::info!("检测到快捷键按下");
 
-    // 新录音开始时重置取消标志，确保上一轮的取消不影响本轮
+    // 新录音时取消上一轮残留任务，但不重置标志
+    // 重置由 handle_transcription_result 在启动新 pipeline 前执行
     let state = app.state::<AppState>();
-    state.cancel_presets.store(false, Ordering::SeqCst);
+    state.cancel_presets.store(true, Ordering::SeqCst);
 
     // 录音开始时：增加会话计数并静音其他应用
     if let Some(ref manager) = *audio_mute_manager.lock().unwrap_or_else(|e| e.into_inner()) {
@@ -3882,7 +3887,9 @@ async fn handle_transcription_result(
     let enable_result_selection = config.enable_result_selection;
 
     // 每次转录开始时重置取消标志
+    // 每次转录开始时重置取消标志并递增代际
     state.cancel_presets.store(false, Ordering::SeqCst);
+    let current_gen = state.preset_generation.fetch_add(1, Ordering::SeqCst);
     let cancel_flag = Arc::clone(&state.cancel_presets);
 
     // 听写模式：只使用 NormalPipeline
@@ -3902,6 +3909,7 @@ async fn handle_transcription_result(
             Some(&llm_config),
             enable_result_selection,
             cancel_flag,
+            current_gen,
         )
         .await;
 
@@ -5498,6 +5506,7 @@ pub fn run() {
                 is_assistant_processing: Arc::new(AtomicBool::new(false)),
                 target_window_for_insert: Arc::new(Mutex::new(None)),
                 cancel_presets: Arc::new(AtomicBool::new(false)),
+                preset_generation: Arc::new(AtomicU64::new(0)),
             };
 
             // 预初始化音频播放器，消除首次按键提示音延迟
