@@ -157,8 +157,6 @@ struct AppState {
     cancel_presets: Arc<AtomicBool>,
     /// 多结果预设代际计数器：每次录音时递增，用于区分新旧任务
     preset_generation: Arc<AtomicU64>,
-    /// 多结果预设代际计数器：每次录音时递增，用于区分新旧任务
-    preset_generation: Arc<std::sync::atomic::AtomicU64>,
 }
 
 // ================== RAII Guards ==================
