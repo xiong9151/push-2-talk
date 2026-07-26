@@ -43,7 +43,29 @@ jobs:
         run: npm ci
 
       - name: Install CMake (required for opus crate)
-        run: choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' --no-progress -y
+        run: |
+          # Check if CMake is already available on the runner
+          if (Get-Command cmake -ErrorAction SilentlyContinue) {
+            Write-Host "CMake already installed: $(cmake --version)"
+          } else {
+            Write-Host "CMake not found, downloading portable version..."
+            # Download CMake portable zip from GitHub releases (more reliable than choco)
+            $url = "https://github.com/Kitware/CMake/releases/download/v3.31.6/cmake-3.31.6-windows-x86_64.zip"
+            $zipPath = "$env:TEMP\cmake.zip"
+            $extractPath = "$env:ProgramFiles\CMake"
+            try {
+              [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+              Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
+              Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
+              $cmakeBin = "$extractPath\cmake-3.31.6-windows-x86_64\bin"
+              # Add to GITHUB_PATH for subsequent steps
+              Add-Content -Path $env:GITHUB_PATH -Value $cmakeBin
+              Write-Host "CMake installed successfully"
+            } catch {
+              Write-Host "CMake download failed: $_"
+              Write-Host "Continuing without CMake (opus crate will fail to compile)"
+            }
+          }
 
       - name: Build only (No Release)
         env:
@@ -187,7 +209,29 @@ jobs:
         run: npm ci
 
       - name: Install CMake (required for opus crate)
-        run: choco install cmake --installargs 'ADD_CMAKE_TO_PATH=System' --no-progress -y
+        run: |
+          # Check if CMake is already available on the runner
+          if (Get-Command cmake -ErrorAction SilentlyContinue) {
+            Write-Host "CMake already installed: $(cmake --version)"
+          } else {
+            Write-Host "CMake not found, downloading portable version..."
+            # Download CMake portable zip from GitHub releases (more reliable than choco)
+            $url = "https://github.com/Kitware/CMake/releases/download/v3.31.6/cmake-3.31.6-windows-x86_64.zip"
+            $zipPath = "$env:TEMP\cmake.zip"
+            $extractPath = "$env:ProgramFiles\CMake"
+            try {
+              [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+              Invoke-WebRequest -Uri $url -OutFile $zipPath -UseBasicParsing
+              Expand-Archive -Path $zipPath -DestinationPath $extractPath -Force
+              $cmakeBin = "$extractPath\cmake-3.31.6-windows-x86_64\bin"
+              # Add to GITHUB_PATH for subsequent steps
+              Add-Content -Path $env:GITHUB_PATH -Value $cmakeBin
+              Write-Host "CMake installed successfully"
+            } catch {
+              Write-Host "CMake download failed: $_"
+              Write-Host "Continuing without CMake (opus crate will fail to compile)"
+            }
+          }
 
       - name: Build and release
         uses: tauri-apps/tauri-action@v0
