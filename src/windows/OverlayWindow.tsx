@@ -464,40 +464,6 @@ export default function OverlayWindow() {
     return () => document.removeEventListener("keydown", handleKeyDown, true);
   }, [status, resultItems, presetResults, confirmResult, handleSelectPresetResult]);
 
-  // 内联 onKeyDown 兜底（当 document 捕获因焦点问题失效时）
-  const handleInlineKeyDown = useCallback((e: React.KeyboardEvent) => {
-    const items = resultItems.length > 0 ? resultItems : presetResults;
-    if (items.length === 0) return;
-
-    if (e.key === "Tab" || e.key === "ArrowDown" || e.key === "ArrowUp") {
-      e.preventDefault();
-      e.stopPropagation();
-      const idx = selectedIndexRef.current;
-      if (e.key === "ArrowUp" || (e.key === "Tab" && e.shiftKey)) {
-        setSelectedIndex(Math.max(idx - 1, 0));
-      } else {
-        setSelectedIndex(Math.min(idx + 1, items.length - 1));
-      }
-    } else if (e.key === "Enter") {
-      e.preventDefault();
-      e.stopPropagation();
-      const idx = selectedIndexRef.current;
-      if (resultItems.length > 0 && resultItems[idx]) {
-        confirmResult(resultItems[idx]);
-      } else if (presetResults.length > 0 && presetResults[idx]?.status === "done") {
-        handleSelectPresetResult(idx);
-      }
-    } else if (e.key === "Escape") {
-      e.preventDefault();
-      e.stopPropagation();
-      if (resultItems.length > 0 && resultItems[0]) {
-        confirmResult(resultItems[0]);
-      } else if (presetResults.length > 0 && presetResults[0]?.text) {
-        handleSelectPresetResult(0);
-      }
-    }
-  }, [resultItems, presetResults, confirmResult, handleSelectPresetResult]);
-
   useEffect(() => {
     invoke<AppConfig>("load_config").then(config => {
       setTheme(config.theme || "light");
