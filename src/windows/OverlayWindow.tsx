@@ -435,10 +435,13 @@ export default function OverlayWindow() {
         e.preventDefault();
         e.stopPropagation();
         const idx = selectedIndexRef.current;
+        const maxIdx = items.length - 1;
         if (e.key === "ArrowUp" || (e.key === "Tab" && e.shiftKey)) {
-          setSelectedIndex(Math.max(idx - 1, 0));
+          // 向上循环：到顶部后再按回到末尾
+          setSelectedIndex(idx <= 0 ? maxIdx : idx - 1);
         } else {
-          setSelectedIndex(Math.min(idx + 1, items.length - 1));
+          // 向下循环：到底部后再按回到开头
+          setSelectedIndex(idx >= maxIdx ? 0 : idx + 1);
         }
       } else if (e.key === "Enter") {
         e.preventDefault();
@@ -452,11 +455,10 @@ export default function OverlayWindow() {
       } else if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
-        if (resultItems.length > 0 && resultItems[0]) {
-          confirmResult(resultItems[0]);
-        } else if (presetResults.length > 0 && presetResults[0]?.text) {
-          handleSelectPresetResult(0);
-        }
+        // 取消：隐藏悬浮窗，不选择任何结果
+        invoke("hide_overlay");
+        setStatus("recording");
+        setPresetResults([]);
       }
     };
 
