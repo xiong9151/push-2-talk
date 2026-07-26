@@ -397,49 +397,71 @@ export default function OverlayWindow() {
     setIsSubmitting(false);
   };
 
-  // Auto-focus window when entering results mode (for keyboard events)
+  // Auto-focus overlay window when entering results mode
   useEffect(() => {
     if (status === "results") {
-      // Small delay to let the overlay render before focusing
       const timer = setTimeout(() => {
+        // 尝试聚焦悬浮窗自身，确保键盘事件能被捕获
+        try {
+          // @ts-ignore - Tauri v2 API
+          const { getCurrentWindow } = window.__TAURI__?.window || {};
+          if (getCurrentWindow) {
+            getCurrentWindow().setFocus();
+          }
+        } catch {}
         window.focus();
+        document.body.focus();
       }, 50);
       return () => clearTimeout(timer);
     }
   }, [status]);
 
-  // 键盘导航
+  // 键盘导航（使用 document 级别捕获，防止被目标窗口拦截）
   useEffect(() => {
     if (status !== "results") return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Tab") {
+      // 只处理悬浮窗可见时的按键
+      const target = e.target as HTMLElement;
+      // 检查是否在 overlay 内部
+      if (!target?.closest('.overlay-root, .overlay-pill, .result-list')) {
+        // 如果点击不在悬浮窗内，不阻止默认行为
+        return;
+      }
+
+      const items = resultItems.length > 0 ? resultItems : presetResults;
+      if (items.length === 0) return;
+
+      if (e.key === "Tab" || e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
         e.stopPropagation();
-        if (e.shiftKey) {
+        if (e.key === "ArrowUp" || (e.key === "Tab" && e.shiftKey)) {
           setSelectedIndex(prev => Math.max(prev - 1, 0));
         } else {
-          setSelectedIndex(prev => Math.min(prev + 1, resultItems.length - 1));
+          setSelectedIndex(prev => Math.min(prev + 1, items.length - 1));
         }
       } else if (e.key === "Enter") {
         e.preventDefault();
         e.stopPropagation();
-        if (resultItems[selectedIndex]) {
+        if (resultItems.length > 0 && resultItems[selectedIndex]) {
           confirmResult(resultItems[selectedIndex]);
+        } else if (presetResults.length > 0 && presetResults[selectedIndex]?.status === "done") {
+          handleSelectPresetResult(selectedIndex);
         }
       } else if (e.key === "Escape") {
         e.preventDefault();
         e.stopPropagation();
-        // 选择原文并插入
-        if (resultItems[0]) {
+        if (resultItems.length > 0 && resultItems[0]) {
           confirmResult(resultItems[0]);
+        } else if (presetResults.length > 0 && presetResults[0]?.text) {
+          handleSelectPresetResult(0);
         }
       }
     };
 
-    window.addEventListener("keydown", handleKeyDown, true);
-    return () => window.removeEventListener("keydown", handleKeyDown, true);
-  }, [status, resultItems, selectedIndex, confirmResult]);
+    document.addEventListener("keydown", handleKeyDown, true);
+    return () => document.removeEventListener("keydown", handleKeyDown, true);
+  }, [status, resultItems, presetResults, selectedIndex, confirmResult, handleSelectPresetResult]);
 
   useEffect(() => {
     invoke<AppConfig>("load_config").then(config => {
