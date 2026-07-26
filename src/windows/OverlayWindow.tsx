@@ -2,6 +2,7 @@ import { AppConfig } from "../types";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { listen, UnlistenFn } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 // 音频级别事件 payload 类型
 interface AudioLevelPayload {
@@ -348,6 +349,11 @@ export default function OverlayWindow() {
   const [theme, setTheme] = useState("light");
   const [resultItems, setResultItems] = useState<TranscriptionResultItem[]>([]);
   const [selectedIndex, setSelectedIndex] = useState(0);
+  const selectedIndexRef = useRef(0); // 用于键盘导航闭包，避免闭包中捕获过期值
+  // 同步 ref 与 state
+  useEffect(() => {
+    selectedIndexRef.current = selectedIndex;
+  }, [selectedIndex]);
   const [liveTranscript, setLiveTranscript] = useState("");
   const [enableLiveTranscript, setEnableLiveTranscript] = useState(false);
   const [presetResults, setPresetResults] = useState<PresetProgress[]>([]);
@@ -397,56 +403,51 @@ export default function OverlayWindow() {
     setIsSubmitting(false);
   };
 
-  // Auto-focus overlay window when entering results mode
+  // Auto-focus overlay window when entering results mode - 强制获取焦点
+  const resultListRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (status === "results") {
-      const timer = setTimeout(() => {
-        // 尝试聚焦悬浮窗自身，确保键盘事件能被捕获
+      const timer = setTimeout(async () => {
+        // 强制聚焦悬浮窗，确保键盘事件能被捕获
         try {
-          // @ts-ignore - Tauri v2 API
-          const { getCurrentWindow } = window.__TAURI__?.window || {};
-          if (getCurrentWindow) {
-            getCurrentWindow().setFocus();
-          }
+          await getCurrentWindow().setFocus();
         } catch {}
+        // 聚焦到结果列表容器，使其可接收键盘事件
+        if (resultListRef.current) {
+          resultListRef.current.focus();
+        }
         window.focus();
         document.body.focus();
-      }, 50);
+      }, 100);
       return () => clearTimeout(timer);
     }
   }, [status]);
 
-  // 键盘导航（使用 document 级别捕获，防止被目标窗口拦截）
+  // 键盘导航（使用 document 级别捕获 + 内联 onKeyDown 双重保障）
   useEffect(() => {
     if (status !== "results") return;
 
     const handleKeyDown = (e: KeyboardEvent) => {
-      // 只处理悬浮窗可见时的按键
-      const target = e.target as HTMLElement;
-      // 检查是否在 overlay 内部
-      if (!target?.closest('.overlay-root, .overlay-pill, .result-list')) {
-        // 如果点击不在悬浮窗内，不阻止默认行为
-        return;
-      }
-
       const items = resultItems.length > 0 ? resultItems : presetResults;
       if (items.length === 0) return;
 
       if (e.key === "Tab" || e.key === "ArrowDown" || e.key === "ArrowUp") {
         e.preventDefault();
         e.stopPropagation();
+        const idx = selectedIndexRef.current;
         if (e.key === "ArrowUp" || (e.key === "Tab" && e.shiftKey)) {
-          setSelectedIndex(prev => Math.max(prev - 1, 0));
+          setSelectedIndex(Math.max(idx - 1, 0));
         } else {
-          setSelectedIndex(prev => Math.min(prev + 1, items.length - 1));
+          setSelectedIndex(Math.min(idx + 1, items.length - 1));
         }
       } else if (e.key === "Enter") {
         e.preventDefault();
         e.stopPropagation();
-        if (resultItems.length > 0 && resultItems[selectedIndex]) {
-          confirmResult(resultItems[selectedIndex]);
-        } else if (presetResults.length > 0 && presetResults[selectedIndex]?.status === "done") {
-          handleSelectPresetResult(selectedIndex);
+        const idx = selectedIndexRef.current;
+        if (resultItems.length > 0 && resultItems[idx]) {
+          confirmResult(resultItems[idx]);
+        } else if (presetResults.length > 0 && presetResults[idx]?.status === "done") {
+          handleSelectPresetResult(idx);
         }
       } else if (e.key === "Escape") {
         e.preventDefault();
@@ -461,7 +462,41 @@ export default function OverlayWindow() {
 
     document.addEventListener("keydown", handleKeyDown, true);
     return () => document.removeEventListener("keydown", handleKeyDown, true);
-  }, [status, resultItems, presetResults, selectedIndex, confirmResult, handleSelectPresetResult]);
+  }, [status, resultItems, presetResults, confirmResult, handleSelectPresetResult]);
+
+  // 内联 onKeyDown 兜底（当 document 捕获因焦点问题失效时）
+  const handleInlineKeyDown = useCallback((e: React.KeyboardEvent) => {
+    const items = resultItems.length > 0 ? resultItems : presetResults;
+    if (items.length === 0) return;
+
+    if (e.key === "Tab" || e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      e.stopPropagation();
+      const idx = selectedIndexRef.current;
+      if (e.key === "ArrowUp" || (e.key === "Tab" && e.shiftKey)) {
+        setSelectedIndex(Math.max(idx - 1, 0));
+      } else {
+        setSelectedIndex(Math.min(idx + 1, items.length - 1));
+      }
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      e.stopPropagation();
+      const idx = selectedIndexRef.current;
+      if (resultItems.length > 0 && resultItems[idx]) {
+        confirmResult(resultItems[idx]);
+      } else if (presetResults.length > 0 && presetResults[idx]?.status === "done") {
+        handleSelectPresetResult(idx);
+      }
+    } else if (e.key === "Escape") {
+      e.preventDefault();
+      e.stopPropagation();
+      if (resultItems.length > 0 && resultItems[0]) {
+        confirmResult(resultItems[0]);
+      } else if (presetResults.length > 0 && presetResults[0]?.text) {
+        handleSelectPresetResult(0);
+      }
+    }
+  }, [resultItems, presetResults, confirmResult, handleSelectPresetResult]);
 
   useEffect(() => {
     invoke<AppConfig>("load_config").then(config => {
