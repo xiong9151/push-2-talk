@@ -1105,12 +1105,15 @@ async fn handle_recording_start(
 ) {
     tracing::info!("检测到快捷键按下");
 
-    // 新录音时取消上一轮残留任务，但不重置标志
-    // 重置由 handle_transcription_result 在启动新 pipeline 前执行
+    // 新录音时取消上一轮残留任务
     let state = app.state::<AppState>();
     state.cancel_presets.store(true, Ordering::SeqCst);
 
-    // 录音开始时：增加会话计数并静音其他应用
+    // 新录音开始：隐藏上一轮可能残留的悬浮窗（预设进度面板等）
+    let _ = app.emit("recording_started", ());
+    if let Some(overlay) = app.get_webview_window("overlay") {
+        let _ = overlay.hide();
+    }
     if let Some(ref manager) = *audio_mute_manager.lock().unwrap_or_else(|e| e.into_inner()) {
         manager.begin_session();
         if let Err(e) = manager.mute_other_apps() {
