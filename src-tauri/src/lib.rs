@@ -1109,11 +1109,7 @@ async fn handle_recording_start(
     let state = app.state::<AppState>();
     state.cancel_presets.store(true, Ordering::SeqCst);
 
-    // 新录音开始：隐藏上一轮可能残留的悬浮窗（预设进度面板等）
-    let _ = app.emit("recording_started", ());
-    if let Some(overlay) = app.get_webview_window("overlay") {
-        let _ = overlay.hide();
-    }
+    // 录音开始时：增加会话计数并静音其他应用
     if let Some(ref manager) = *audio_mute_manager.lock().unwrap_or_else(|e| e.into_inner()) {
         manager.begin_session();
         if let Err(e) = manager.mute_other_apps() {
