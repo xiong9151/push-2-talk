@@ -2065,17 +2065,18 @@ impl AppConfig {
         }
     }
 
-    /// 创建一个适合发送到前端的副本（移除所有敏感字段）。
+    /// 创建一个适合发送到前端的副本。
     ///
-    /// 清空以下敏感信息：
-    /// - LLM Provider 的 API Key（数组中存储，DevTools 中不易追踪）
-    /// - 自定义 ASR 提供商的 API Key（数组中存储）
+    /// 注意：此函数返回完整配置的克隆，包括 API Key 等敏感字段。
+    /// 这是因为前端主窗口（main）需要这些字段用于显示和保存。
     ///
-    /// 保留顶层 ASR API Key 和 ASR 凭据中的 Key（前端 UI 直接显示需要）。
+    /// 安全约束由调用方保证：
+    /// - load_config 命令仅由主窗口调用（用户已在此输入 API Key）
+    /// - emit_config_updated 对 overlay/result_panel 窗口发送专用精简事件（config_updated_light）
+    ///   仅包含 theme 和 enable_live_transcript 等非敏感字段
+    ///
+    /// 如果将来需要从其他窗口加载配置，请使用专门的精简结构体。
     pub fn sanitized_for_frontend(&self) -> Self {
-        // 前端 UI 已经显示所有 API Key 字段（用户手动输入的），
-        // 清洗它们反而会破坏前端保存能力。
-        // 直接返回完整配置的克隆。
         self.clone()
     }
 

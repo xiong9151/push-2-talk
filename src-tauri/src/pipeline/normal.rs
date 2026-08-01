@@ -8,7 +8,7 @@
 
 use anyhow::Result;
 use serde_json;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
@@ -52,6 +52,7 @@ impl NormalPipeline {
         llm_config: Option<&crate::config::LlmConfig>,
         enable_result_selection: bool,
         cancel_flag: Arc<AtomicBool>,
+        gen_counter: Arc<AtomicU64>,
         preset_gen: u64,
     ) -> Result<(PipelineResult, Vec<TranscriptionResultItem>)> {
         // 1. 解包 ASR 结果
@@ -99,6 +100,7 @@ impl NormalPipeline {
             llm_config,
             enable_result_selection,
             cancel_flag,
+            gen_counter,
             preset_gen,
         )
         .await;
@@ -108,21 +110,22 @@ impl NormalPipeline {
         // 多结果模式不隐藏悬浮窗，由用户选择后处理
         if !enable_result_selection {
             super::focus::hide_overlay_and_restore_focus(app, target_hwnd).await;
-        }
 
-        // 6. 触发学习观察（如果插入成功）
-        if let Some(hwnd) = target_hwnd {
-            if let Ok((config, _)) = AppConfig::load() {
-                if config.learning_config.enabled {
-                    start_learning_observation(
-                        app.clone(),
-                        final_text.clone(),
-                        hwnd,
-                        config.learning_config,
-                    );
+            // 6. 仅单结果模式（文本已自动插入），触发学习观察
+            if let Some(hwnd) = target_hwnd {
+                if let Ok((config, _)) = AppConfig::load() {
+                    if config.learning_config.enabled {
+                        start_learning_observation(
+                            app.clone(),
+                            final_text.clone(),
+                            hwnd,
+                            config.learning_config,
+                        );
+                    }
                 }
             }
         }
+        // 多结果模式：学习观察在 select_transcription_result 中文本插入后触发
 
         // 7. 返回结果
         let history_original = if original_text.is_some() {
@@ -229,6 +232,7 @@ impl NormalPipeline {
         llm_config: Option<&crate::config::LlmConfig>,
         enable_result_selection: bool,
         cancel_flag: Arc<AtomicBool>,
+        gen_counter: Arc<AtomicU64>,
         preset_gen: u64,
     ) -> (Vec<TranscriptionResultItem>, String, Option<String>, Option<u64>) {
         // 至少包含原文作为第一项
@@ -259,7 +263,7 @@ impl NormalPipeline {
             && presets.iter().any(|p| p.selected_for_display);
 
         if do_multi {
-            Self::run_multi_presets(app, processor_inner, text, dictionary, enable_post_process, enable_dictionary_enhancement, &presets, &mut items, cancel_flag, preset_gen).await
+            Self::run_multi_presets(app, processor_inner, text, dictionary, enable_post_process, enable_dictionary_enhancement, &presets, &mut items, cancel_flag, gen_counter, preset_gen).await
         } else {
             Self::run_single_preset(app, processor_inner, text, dictionary, enable_post_process, enable_dictionary_enhancement, &mut items).await
         }
@@ -276,6 +280,7 @@ impl NormalPipeline {
         presets: &[crate::config::LlmPreset],
         items: &mut Vec<TranscriptionResultItem>,
         cancel_flag: Arc<AtomicBool>,
+        gen_counter: Arc<AtomicU64>,
         preset_gen: u64,
     ) -> (Vec<TranscriptionResultItem>, String, Option<String>, Option<u64>) {
         let _ = app.emit("post_processing", "polishing");
@@ -287,7 +292,8 @@ impl NormalPipeline {
             "index": 0,
             "name": "原始文本",
             "status": "done",
-            "text": text
+            "text": text,
+            "gen": preset_gen
         }));
 
         // 先发射所有预设的"处理中"状态（index 从 1 开始）
@@ -295,7 +301,8 @@ impl NormalPipeline {
             let _ = app.emit("preset_progress", serde_json::json!({
                 "index": i + 1,
                 "name": preset.name,
-                "status": "processing"
+                "status": "processing",
+                "gen": preset_gen
             }));
         }
 
@@ -308,15 +315,16 @@ impl NormalPipeline {
             let app_clone = app.clone();
             let cancel = Arc::clone(&cancel_flag);
             let gen = preset_gen;
+            let gen_counter_inner = Arc::clone(&gen_counter);
             handles.push(tokio::spawn(async move {
                 let start = Instant::now();
                 // 检查是否已被取消或代际已过期（上一轮残留任务自动取消）
-                if cancel.load(Ordering::Relaxed) {
+                if cancel.load(Ordering::Acquire) || gen_counter_inner.load(Ordering::Acquire) != gen {
                     return (pc, None, start.elapsed().as_millis() as u64);
                 }
                 let result = p.polish_with_preset(&t, &d, enable_post_process, enable_dictionary_enhancement, &pc).await;
                 // 任务完成后再次检查取消和代际，防止上一轮任务在新一轮中错误发射
-                if cancel.load(Ordering::Relaxed) {
+                if cancel.load(Ordering::Acquire) || gen_counter_inner.load(Ordering::Acquire) != gen {
                     return (pc, None, start.elapsed().as_millis() as u64);
                 }
                 // 立即发射结果事件
@@ -324,7 +332,8 @@ impl NormalPipeline {
                     "index": i + 1,
                     "name": pc.name,
                     "status": if result.is_ok() { "done" } else { "error" },
-                    "text": result.as_ref().ok().cloned().unwrap_or_default()
+                    "text": result.as_ref().ok().cloned().unwrap_or_default(),
+                    "gen": gen
                 }));
                 (pc, Some(result), start.elapsed().as_millis() as u64)
             }));

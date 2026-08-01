@@ -22,6 +22,7 @@ interface PresetProgress {
   name: string;
   status: "processing" | "done" | "error" | "pending" | "cancelled";
   text?: string | null;
+  gen?: number; // 代际 ID，用于拒绝旧任务的事件
 }
 
 // 状态类型
@@ -359,6 +360,12 @@ export default function OverlayWindow() {
   const [presetResults, setPresetResults] = useState<PresetProgress[]>([]);
   const hasSelectedResultRef = useRef(false); // 用户是否已选择了一个结果（用 ref 确保闭包可见）
   const hasEnteredResultsRef = useRef(false); // 是否已进入 results 模式（防止重复弹出）
+  const presetGenerationRef = useRef<number | null>(null); // 当前会话的 gen 水印，由第一个 preset_progress 事件设置
+
+  // 检查所有预设是否都已终止且全部失败（无可用结果）
+  const allPresetsTerminalAndFailed = presetResults.length > 0 && presetResults.every(
+    p => p.status === "error" || p.status === "cancelled"
+  );
 
   const { level: audioLevel, time: animationTime } = useSmoothAudioLevel(status === "recording");
 
@@ -491,11 +498,11 @@ export default function OverlayWindow() {
         return true;
       };
 
-      if (!(await registerListener("config_updated", (event) => {
-        const config = event.payload as AppConfig;
-        console.log("[OverlayWindow] 收到 config_updated 事件, theme=", config.theme);
-        setTheme(config.theme || "light");
-        setEnableLiveTranscript(config.enable_live_transcript || false);
+      if (!(await registerListener("config_updated_light", (event) => {
+        const payload = event.payload as Record<string, unknown>;
+        console.log("[OverlayWindow] 收到 config_updated_light 事件, theme=", payload.theme);
+        if (typeof payload.theme === "string") setTheme(payload.theme);
+        if (typeof payload.enable_live_transcript === "boolean") setEnableLiveTranscript(payload.enable_live_transcript);
       }))) return;
 
       if (!(await registerListener("recording_started", () => {
@@ -508,6 +515,7 @@ export default function OverlayWindow() {
         setPresetResults([]);
         hasSelectedResultRef.current = false;
         hasEnteredResultsRef.current = false;
+        presetGenerationRef.current = null; // 重置代际水印，等待新录音的预设事件设置
       }))) return;
 
       if (!(await registerListener("recording_locked", () => {
@@ -566,6 +574,15 @@ export default function OverlayWindow() {
 
       if (!(await registerListener("preset_progress", (event) => {
         const payload = event.payload as PresetProgress;
+        // 代际检查：拒绝旧任务的脏数据（比 hasSelectedResultRef 更早的防线）
+        if (payload.gen !== undefined) {
+          // 首次收到预设事件时，记录当前代际水印
+          if (presetGenerationRef.current === null) {
+            presetGenerationRef.current = payload.gen;
+          }
+          // 拒绝来自旧代际的残留事件
+          if (payload.gen < presetGenerationRef.current) return;
+        }
         // 用户已选择结果，忽略后续所有事件
         if (hasSelectedResultRef.current) return;
         setPresetResults(prev => {
@@ -662,11 +679,11 @@ export default function OverlayWindow() {
     }, 300);
     try {
       await invoke("cancel_locked_recording");
-      setIsSubmitting(false);
     } catch (e) {
       console.error("取消录音失败:", e);
-      setIsSubmitting(false);
     }
+    setIsSubmitting(false);
+    setIsLocked(false);
   };
 
   // Cleanup debounce timer on unmount
@@ -683,7 +700,8 @@ export default function OverlayWindow() {
       className={`overlay-root ${theme === "dark" ? "theme-dark" : "theme-light"}`}
     >
       {/* 预设进度面板：只要有预设结果就显示，不依赖 status */}
-      {presetResults.length > 0 ? (
+      {/* 但如果所有预设都已终止且全部失败，退回到普通结果视图或录音状态 */}
+      {presetResults.length > 0 && !allPresetsTerminalAndFailed ? (
         <div className={`overlay-pill overlay-pill-results`}>
           <PresetProgressList
             items={presetResults}
@@ -691,6 +709,15 @@ export default function OverlayWindow() {
             onSelect={setSelectedIndex}
             onConfirm={handleSelectPresetResult}
             disabled={isSubmitting}
+          />
+        </div>
+      ) : allPresetsTerminalAndFailed && resultItems.length > 0 ? (
+        <div className={`overlay-pill overlay-pill-results`}>
+          <ResultList
+            items={resultItems}
+            selectedIndex={selectedIndex}
+            onSelect={setSelectedIndex}
+            onConfirm={confirmResult}
           />
         </div>
       ) : status === "results" ? (

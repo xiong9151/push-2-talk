@@ -167,7 +167,7 @@ export default function ResultPanelWindow() {
       if (cancelled) { u3(); return; }
       cleanups.push(u3);
 
-      const u4 = await listen<AppConfig>("config_updated", (event) => {
+      const u4 = await listen<AppConfig>("config_updated_light", (event) => {
         if (cancelled) return;
         setTheme(event.payload.theme || "light");
       });

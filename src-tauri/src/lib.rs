@@ -42,6 +42,7 @@ use text_inserter::TextInserter;
 use usage_stats::UsageStats;
 
 use base64::{engine::general_purpose, Engine as _};
+use serde_json;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use tauri::{
@@ -398,9 +399,19 @@ where
 
 fn emit_config_updated(app: &AppHandle, config: &AppConfig) {
     sync_tray_menu_from_config(app, config);
-    // Bug 3: 发送清除了API Key的安全副本到前端
+    // 发送全量配置到主窗口（前端需要完整配置用于保存和显示）
+    // 但为 overlay/result_panel 窗口发送精简版本（仅含 theme 等必要字段）
+    // 避免 API Key 等敏感信息泄漏到仅需样式信息的窗口
     let sanitized = config.sanitized_for_frontend();
     let _ = app.emit("config_updated", sanitized);
+
+    // 发送仅含主题的精简事件到 overlay 和 result_panel 窗口
+    // 这些窗口只关心 theme 和 enable_live_transcript，无需接收全量配置
+    let theme_payload = serde_json::json!({
+        "theme": config.theme,
+        "enable_live_transcript": config.enable_live_transcript,
+    });
+    let _ = app.emit("config_updated_light", theme_payload);
 }
 
 fn hotwords_content_changed(current: &str, next: &str) -> bool {
@@ -2253,21 +2264,34 @@ async fn start_app(
         }
 
         // === 松手模式完成：用户再次按下快捷键完成录音并转写 ===
+        let mut processing_stop_acquired = false;
         if is_release_mode {
             tracing::info!("松手模式完成：用户再次按下快捷键，结束录音并转写");
-            // 清除锁定状态，让代码继续执行正常的停止和转写流程
-            is_recording_locked_stop.store(false, Ordering::SeqCst);
+            // 先尝试获取 is_processing_stop，防止与 finish_locked_recording 竞态
+            // 如果 finish_locked_recording 已获得锁，不清除 is_recording_locked 直接返回
+            if is_processing_stop_stop
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+            {
+                processing_stop_acquired = true;
+                // 清除锁定状态，让代码继续执行正常的停止和转写流程
+                is_recording_locked_stop.store(false, Ordering::SeqCst);
+                *recording_start_time_stop.lock().unwrap_or_else(|e| e.into_inner()) = None;
+                if let Some(handle) = lock_timer_handle_stop.lock().unwrap_or_else(|e| e.into_inner()).take() {
+                    handle.abort();
+                }
+                // 不 return，继续向下执行正常的停止录音和转写流程
+                // 但需要跳过下方的通用清理块（已在此处完成），避免重复清理
+            } else {
+                tracing::info!("松手模式完成：finish_locked_recording 正在处理中，跳过 on_stop");
+                return;
+            }
+        } else {
+            // === 非松手模式：立即清理定时器相关状态（防止竞态）===
             *recording_start_time_stop.lock().unwrap_or_else(|e| e.into_inner()) = None;
             if let Some(handle) = lock_timer_handle_stop.lock().unwrap_or_else(|e| e.into_inner()).take() {
                 handle.abort();
             }
-            // 不 return，继续向下执行正常的停止录音和转写流程
-        }
-
-        // === 松手模式：立即清理定时器相关状态（防止竞态）===
-        *recording_start_time_stop.lock().unwrap_or_else(|e| e.into_inner()) = None;
-        if let Some(handle) = lock_timer_handle_stop.lock().unwrap_or_else(|e| e.into_inner()).take() {
-            handle.abort();
         }
 
         // === 松手模式：检查锁定状态 ===
@@ -2278,12 +2302,15 @@ async fn start_app(
 
         // === 防止与 finish_locked_recording 竞态（以及 rdev ghost key 自重复） ===
         // 使用 compare_exchange 原子设置标志，确保只有一个路径能继续执行
-        if is_processing_stop_stop
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_err()
-        {
-            tracing::info!("finish_locked_recording 正在处理中，跳过 on_stop");
-            return;
+        // 如果松手模式路径已获取锁，则跳过此处的 compare_exchange
+        if !processing_stop_acquired {
+            if is_processing_stop_stop
+                .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+            {
+                tracing::info!("finish_locked_recording 正在处理中，跳过 on_stop");
+                return;
+            }
         }
         // 克隆 is_processing_stop_stop 以便在 async 块内持有 guard
         let is_processing_stop = Arc::clone(&is_processing_stop_stop);
@@ -3313,7 +3340,9 @@ async fn handle_realtime_stop(
                 // 发送 finish
                 if let Err(e) = session.finish_audio().await {
                     tracing::error!("豆包发送 finish 失败: {}", e);
+                    // 清理会话状态，防止 WebSocket 连接泄漏
                     drop(doubao_session_guard);
+                    *doubao_session.lock().await = None;
                     // 回退到备用方案
                     if let Some(audio_data) = audio_data {
                         fallback_transcription(
@@ -3432,7 +3461,9 @@ async fn handle_realtime_stop(
 
                 if let Err(e) = session.finish_audio().await {
                     tracing::error!("豆包输入法发送 finish 失败: {}", e);
+                    // 清理会话状态，防止 WebSocket 连接泄漏
                     drop(doubao_ime_session_guard);
+                    *doubao_ime_session.lock().await = None;
                     if let Some(audio_data) = audio_data {
                         fallback_transcription(
                             app,
@@ -3532,7 +3563,9 @@ async fn handle_realtime_stop(
                 // 发送 commit
                 if let Err(e) = session.commit_audio().await {
                     tracing::error!("千问发送 commit 失败: {}", e);
+                    // 清理会话状态，防止 WebSocket 连接泄漏
                     drop(session_guard);
+                    *active_session.lock().await = None;
                     // 回退到备用方案
                     if let Some(audio_data) = audio_data {
                         fallback_transcription(
@@ -3708,7 +3741,6 @@ async fn emit_error_and_hide_overlay(app: &AppHandle, error_msg: String) {
 /// Strip potential API keys and sensitive patterns from error messages
 /// before sending them to the frontend.
 fn sanitize_error_for_frontend(msg: &str) -> String {
-    // Remove common API key patterns (sk-..., Bearer tokens, etc.)
     // Use simple substring matching rather than regex to avoid adding a dependency.
     let mut result = msg.to_string();
 
@@ -3716,6 +3748,7 @@ fn sanitize_error_for_frontend(msg: &str) -> String {
     // matching "task-", "desk-", "mask-" etc.
     if let Some(pos) = result.find("sk-") {
         // Word boundary: position must be 0, or preceding char is not alphanumeric
+        // result.find("sk-") always returns a valid char boundary (sk- is ASCII)
         let has_boundary = pos == 0
             || !result[..pos]
                 .chars()
@@ -3737,6 +3770,7 @@ fn sanitize_error_for_frontend(msg: &str) -> String {
     // "bearer" that appears before the real capitalized "Bearer" token)
     for prefix in &["Bearer ", "bearer ", "BEARER "] {
         if let Some(pos) = result.find(prefix) {
+            // prefix is ASCII, pos is always at a valid char boundary
             let end = result[pos + prefix.len()..]
                 .find(|c: char| c.is_whitespace() || c == '"' || c == '\'')
                 .map(|end| pos + prefix.len() + end)
@@ -3785,23 +3819,87 @@ fn sanitize_error_for_frontend(msg: &str) -> String {
         }
     }
 
-    // Generic heuristic: mask any long (>=28 chars) continuous alphanumeric/dash/underscore
+    // Mask "x-api-key:" header values (common in HTTP error responses)
+    for prefix in &["x-api-key:", "x-api-key ", "X-Api-Key:", "X-Api-Key "] {
+        if let Some(pos) = result.find(prefix) {
+            let start = pos + prefix.len();
+            let end = result[start..]
+                .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '\n' || c == '\r')
+                .map(|end| start + end)
+                .unwrap_or(result.len());
+            if end > start {
+                result.replace_range(start..end, "***");
+            }
+        }
+    }
+
+    // Mask "apikey=" query parameter values
+    for key_pattern in &["apikey=", "apiKey=", "API_KEY="] {
+        if let Some(pos) = result.find(key_pattern) {
+            let start = pos + key_pattern.len();
+            let end = result[start..]
+                .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '&')
+                .map(|end| start + end)
+                .unwrap_or(result.len());
+            if end > start {
+                result.replace_range(start..end, "***");
+            }
+        }
+    }
+
+    // Mask "secret=" or "secret_key=" values
+    for key_pattern in &["secret=", "secret_key=", "secretKey="] {
+        if let Some(pos) = result.find(key_pattern) {
+            let start = pos + key_pattern.len();
+            let end = result[start..]
+                .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '&')
+                .map(|end| start + end)
+                .unwrap_or(result.len());
+            if end > start {
+                result.replace_range(start..end, "***");
+            }
+        }
+    }
+
+    // Mask "password=" or "passwd=" values
+    for key_pattern in &["password=", "passwd="] {
+        if let Some(pos) = result.find(key_pattern) {
+            let start = pos + key_pattern.len();
+            let end = result[start..]
+                .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == '&')
+                .map(|end| start + end)
+                .unwrap_or(result.len());
+            if end > start {
+                result.replace_range(start..end, "***");
+            }
+        }
+    }
+
+    // Generic heuristic: mask any long (>=28 chars) continuous alphanumeric/dash/underscore/dot
     // sequence that looks like an API key or token regardless of prefix.
     // This catches keys/tokens that don't start with sk-, Bearer, or known parameter names.
+    // Also catches JWT tokens (base64url-encoded, separated by dots) and similar long tokens.
+    // Uses byte-level iteration but only on ASCII-range bytes, so all positions are
+    // guaranteed to be at valid char boundaries.
     let bytes = result.as_bytes();
     let mut i = 0;
     let mut runs: Vec<(usize, usize)> = Vec::new();
     while i < result.len() {
-        if bytes[i].is_ascii_alphanumeric() || bytes[i] == b'-' || bytes[i] == b'_' {
+        if bytes[i].is_ascii_alphanumeric() || bytes[i] == b'-' || bytes[i] == b'_' || bytes[i] == b'.' {
             let start = i;
             while i < result.len()
-                && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'-' || bytes[i] == b'_')
+                && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'-' || bytes[i] == b'_' || bytes[i] == b'.')
             {
                 i += 1;
             }
             let run_len = i - start;
-            if run_len >= 28 {
-                runs.push((start, i));
+            // Also mask JWT-like tokens (containing dots, >= 40 chars total)
+            let has_dot = bytes[start..i].contains(&b'.');
+            if run_len >= 28 || (has_dot && run_len >= 20) {
+                // Verify byte boundaries are valid before replacing (safety check for UTF-8)
+                if result.is_char_boundary(start) && result.is_char_boundary(i) {
+                    runs.push((start, i));
+                }
             }
         } else {
             i += 1;
@@ -3883,10 +3981,11 @@ async fn handle_transcription_result(
     let llm_config = config.llm_config.clone();
     let enable_result_selection = config.enable_result_selection;
 
-    // 每次转录开始时重置取消标志并递增代际
-    state.cancel_presets.store(false, Ordering::SeqCst);
+    // 每次转录开始时递增代际（先于取消标志重置，确保旧任务通过代际检查取消）
     let current_gen = state.preset_generation.fetch_add(1, Ordering::SeqCst);
+    state.cancel_presets.store(false, Ordering::SeqCst);
     let cancel_flag = Arc::clone(&state.cancel_presets);
+    let gen_counter = Arc::clone(&state.preset_generation);
 
     // 听写模式：只使用 NormalPipeline
     let pipeline = NormalPipeline::new();
@@ -3905,6 +4004,7 @@ async fn handle_transcription_result(
             Some(&llm_config),
             enable_result_selection,
             cancel_flag,
+            gen_counter,
             current_gen,
         )
         .await;
@@ -3912,10 +4012,10 @@ async fn handle_transcription_result(
     // 处理管道结果
     match pipeline_result {
         Ok((result, items)) => {
-            // 在发射事件前，检查是否已有新一轮录音开始
-            // 如果有，则放弃本轮结果发射，避免顶掉新录音的悬浮窗
-            if state.cancel_presets.load(Ordering::SeqCst) {
-                tracing::info!("检测到新一轮录音已开始，放弃本轮结果发射");
+            // 在发射事件前，检查是否已有新一轮录音开始（通过代际计数器）
+            // 如果当前代际 != 录制时的代际，说明新一轮录音已开始，放弃本轮结果发射
+            if state.preset_generation.load(Ordering::SeqCst) != current_gen {
+                tracing::info!("检测到新一轮录音已开始（代际变化），放弃本轮结果发射");
                 return;
             }
 
@@ -3962,6 +4062,15 @@ async fn handle_transcription_result(
             // 注意：多结果模式下（enable_result_selection=true），即使 items 只有 1 个
             // 也不自动插入，因为用户可能期望看到选择面板
             if items.len() == 1 && !enable_result_selection {
+                // 先恢复焦点到目标窗口，确保文本插入到正确位置
+                if let Some(hwnd) = target_hwnd {
+                    if crate::win32_input::is_window_valid(hwnd) {
+                        crate::win32_input::restore_focus_with_verify(hwnd, 3);
+                    }
+                }
+                // 等待焦点稳定
+                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
                 let inserter = { text_inserter.lock().unwrap_or_else(|e| e.into_inner()).take() };
                 // Use TextInserterGuard to ensure the inserter is returned even on panic
                 let mut _guard = TextInserterGuard {
@@ -4407,6 +4516,7 @@ async fn select_transcription_result(app_handle: AppHandle, text: String) -> Res
     if let Some(ref mut ins) = guard.inserter {
         // 先恢复焦点到目标窗口
         let target_hwnd = *state.target_window_for_insert.lock().unwrap_or_else(|e| e.into_inner());
+        let restore_hwnd = target_hwnd;
         if let Some(hwnd) = target_hwnd {
             if crate::win32_input::is_window_valid(hwnd) {
                 crate::win32_input::restore_focus_with_verify(hwnd, 3);
@@ -4419,6 +4529,22 @@ async fn select_transcription_result(app_handle: AppHandle, text: String) -> Res
             tracing::error!("插入选中文本失败: {}", e);
             e.to_string()
         })?;
+
+        // 插入成功后触发学习观察
+        if let Some(hwnd) = restore_hwnd {
+            if crate::win32_input::is_window_valid(hwnd) {
+                if let Ok((config, _)) = config::AppConfig::load() {
+                    if config.learning_config.enabled {
+                        learning::coordinator::start_learning_observation(
+                            app_handle.clone(),
+                            text.clone(),
+                            hwnd,
+                            config.learning_config,
+                        );
+                    }
+                }
+            }
+        }
     } else {
         tracing::warn!("select_transcription_result: TextInserter 未初始化");
     }

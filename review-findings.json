@@ -1,0 +1,110 @@
+{
+  "issues": [
+    {
+      "id": "CANCEL_PRESETS_GENERATION_DEAD_CODE",
+      "severity": "high",
+      "summary": "preset_generation 代际计数器被递增但从未被检查，是死代码",
+      "details": "src-tauri/src/lib.rs 中，preset_generation.fetch_add(1) 在每次转录开始时递增，current_gen 被传入 NormalPipeline，但在 run_multi_presets 中 preset_gen 参数只在创建 tokio::spawn 时被捕获(gen = preset_gen)，却从未与 cancel_flag 组合检查。代际计数器本意是区分新旧任务，防止旧任务的预设结果污染新任务，但实际上只有 cancel_presets (AtomicBool) 在起作用。代际计数器是冗余的。",
+      "files": [
+        "src-tauri/src/lib.rs:3888",
+        "src-tauri/src/pipeline/normal.rs:310"
+      ],
+      "fix_suggestion": "移除 preset_generation 字段及其所有相关代码。cancel_presets AtomicBool 已经足够处理取消逻辑。在 handle_recording_start 中设置 cancel_presets=true 时，上一轮的所有 tokio::spawn 任务都会检查到取消标志并提前返回。"
+    },
+    {
+      "id": "CANCEL_PRESETS_ATOMICBOOL_DESIGN",
+      "severity": "medium",
+      "summary": "cancel_presets 作为全局 AtomicBool 的设计存在竞态可能",
+      "details": "cancel_presets 在 handle_recording_start(1110行)中被设为 true，在 handle_transcription_result(3887行)中被设为 false。但这两者运行在不同的异步任务中，时序不确定。如果新录音的 handle_recording_start 在旧录音的 handle_transcription_result 的 cancel_presets.store(false) 之后执行，但旧录音的 tokio::spawn 预设任务在 cancel.store(true) 之前已经通过了检查，会导致旧任务的结果仍然发射。",
+      "files": [
+        "src-tauri/src/lib.rs:1110",
+        "src-tauri/src/lib.rs:3887",
+        "src-tauri/src/pipeline/normal.rs:314"
+      ],
+      "fix_suggestion": "使用 tokio::sync::watch 或 generation + mutex 组合。更简单的方案：将 handle_recording_start 中的 cancel_presets 设置移到最前面，确保新录音开始时立即取消旧任务，且 handle_transcription_result 在启动预设任务前检查 cancel_presets 是否已被新录音设置。"
+    },
+    {
+      "id": "HANDLE_TRANSCRIPTION_RESULT_TOO_LARGE",
+      "severity": "high",
+      "summary": "handle_transcription_result 函数过于庞大，职责过多",
+      "details": "该函数(约140行，3860-4004行)混合了：配置读取、取消标志管理、pipeline调用、统计数据更新、事件发射、文本插入决策、悬浮窗显示控制。虽然已经被 NormalPipeline 分担了部分逻辑，但函数本身仍然处理了太多层次的职责。",
+      "files": [
+        "src-tauri/src/lib.rs:3860-4004"
+      ],
+      "fix_suggestion": "拆分为三个步骤：(1) extract_pipeline_inputs() 负责获取所有输入参数；(2) handle_pipeline_output() 负责处理 pipeline 结果(事件发射、插入决策)；(3) update_stats_and_emit() 负责统计和事件。"
+    },
+    {
+      "id": "HANDLE_REALTIME_STOP_DUPLICATE_FALLBACK",
+      "severity": "high",
+      "summary": "handle_realtime_stop 中有大量重复的 fallback 处理代码块",
+      "details": "在 handle_realtime_stop(3256-3631行) 中，针对 Doubao、Qwen、DoubaoIme 三种 provider，fallback 到 HTTP 转录的逻辑几乎是完全相同的代码块，每个分支都包含：drop(session_guard), if let Some(audio_data) = audio_data { fallback_transcription(...) } else { emit_error(...) }。这种重复跨越了约 300 行代码。",
+      "files": [
+        "src-tauri/src/lib.rs:3256-3631"
+      ],
+      "fix_suggestion": "提取一个辅助函数 do_fallback_or_error(app, audio_data, fallback_fn) 或使用宏来消除重复。每个 provider 分支只需要关心 session 的 finish/wait 逻辑，fallback 路径完全相同。"
+    },
+    {
+      "id": "EVENT_NAMING_INCONSISTENCY",
+      "severity": "medium",
+      "summary": "preset_progress 事件命名与 transcription_results 事件职责重叠",
+      "details": "preset_progress 用于逐条发射预设进度，transcription_results 用于一次性发射所有结果。前端需要同时监听两个事件并维护两个状态数组(resultItems/presetResults)，增加了复杂度。preset_progress 的 payload 格式是 untyped serde_json::json!()，失去了类型安全。",
+      "files": [
+        "src-tauri/src/pipeline/normal.rs:286-300",
+        "src/src/windows/OverlayWindow.tsx:550-592"
+      ],
+      "fix_suggestion": "统一为单一事件模式：要么全量发射(transcription_results 携带所有结果，含状态)，要么增量发射(只有一个 preset_progress 事件，前端用单一状态数组)。取消 transcription_results 事件，前端只维护 presetResults 一个状态。"
+    },
+    {
+      "id": "FRONTEND_STATE_DUPLICATION",
+      "severity": "medium",
+      "summary": "resultItems 和 presetResults 两个状态可以合并",
+      "details": "OverlayWindow.tsx 中同时维护 resultItems(TranscriptionResultItem[]) 和 presetResults(PresetProgress[]) 两个状态，但两者在渲染时是互斥的(presetResults.length > 0 时优先显示 PresetProgressList，否则才显示 ResultList)。键盘导航逻辑也需同时检查两个数组。",
+      "files": [
+        "src/src/windows/OverlayWindow.tsx:350-359"
+      ],
+      "fix_suggestion": "合并为一个状态 unifiedResults: PresetProgress[]，其中初始结果(original、传统单结果)也以 PresetProgress 格式存放。这样前端只需要维护一个状态数组，键盘导航、渲染判断都简化。"
+    },
+    {
+      "id": "HIDE_OVERLAY_FUNCTION_DUPLICATION",
+      "severity": "medium",
+      "summary": "hide_overlay_window 和 hide_overlay_silently 几乎相同",
+      "details": "hide_overlay_window(4007行) 和 hide_overlay_silently(3819行) 两个函数的实现几乎完全一样，唯一的区别是日志信息不同。两个函数都包含重试逻辑。",
+      "files": [
+        "src-tauri/src/lib.rs:3819-3830",
+        "src-tauri/src/lib.rs:4007-4018"
+      ],
+      "fix_suggestion": "合并为一个函数 hide_overlay_with_retry(app, log_context)，传入日志前缀区分调用来源。"
+    },
+    {
+      "id": "FRONTEND_RESULT_SELECTION_ARCHITECTURE",
+      "severity": "low",
+      "summary": "结果选择逻辑在前端实现，但取消逻辑在后端，职责边界模糊",
+      "details": "用户选择结果时，前端调用 cancel_pending_presets(后端取消) + select_transcription_result(后端插入)。但后端 run_multi_presets 的 tokio::spawn 任务在发射 preset_progress 事件后仍会继续运行。前端已经选择了结果，但后端的预设任务可能还在运行并继续发射事件，需要前端通过 hasSelectedResultRef 来忽略后续事件。",
+      "files": [
+        "src/src/windows/OverlayWindow.tsx:381-403",
+        "src-tauri/src/pipeline/normal.rs:302-331"
+      ],
+      "fix_suggestion": "后端在 cancel_presets 被设置时，除了跳过结果发射，还应该主动 abort 所有尚未完成的 JoinHandle。这样前端选择结果后，后端任务立即停止，不需要前端用 ref 过滤事件。"
+    },
+    {
+      "id": "TRANSCRIPTION_RESULT_ITEM_ID_GENERATION",
+      "severity": "low",
+      "summary": "TranscriptionResultItem id 生成使用 items.len() 作为 ID 的一部分，不可靠",
+      "details": "在 normal.rs 343-346行，id 被设置为 format!(\"preset-{}\", items.len())，但 items 在循环中不断被 push，所以 id 实际上等于 i+1(因为 items 初始只有 original 一项)。但 items.len() 的值依赖于 push 的执行顺序，如果异步任务完成的顺序不同，id 可能重复或混乱。",
+      "files": [
+        "src-tauri/src/pipeline/normal.rs:343-347"
+      ],
+      "fix_suggestion": "使用预设的索引 i+1 作为 id（注意 original 已占用了 index 0），或者直接使用预设对象的唯一标识。"
+    },
+    {
+      "id": "CONFIG_LOCK_DEADLOCK_RISK",
+      "severity": "low",
+      "summary": "load_persisted_config 在 async 函数中持有 CONFIG_LOCK 可能引发死锁",
+      "details": "handle_transcription_result 是 async 函数，内部调用 load_persisted_config() 获取 CONFIG_LOCK。虽然 load_persisted_config 本身是同步的（不会跨 await 持锁），但如果它在 mutex 中等待 I/O 时间长，可能阻塞其他需要 CONFIG_LOCK 的 async 任务。",
+      "files": [
+        "src-tauri/src/lib.rs:3881"
+      ],
+      "fix_suggestion": "考虑将配置读取提前到 on_stop 回调中，在 spawn async 之前完成，或者使用 tokio::sync::Mutex 替代 std::sync::Mutex。"
+    }
+  ]
+}
