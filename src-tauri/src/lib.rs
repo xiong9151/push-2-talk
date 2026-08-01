@@ -1122,13 +1122,14 @@ async fn handle_recording_start(
     let state = app.state::<AppState>();
     state.preset_generation.fetch_add(1, Ordering::SeqCst);
 
-    // 录音开始时：增加会话计数并静音其他应用
-    if let Some(ref manager) = *audio_mute_manager.lock().unwrap_or_else(|e| e.into_inner()) {
-        manager.begin_session();
-        if let Err(e) = manager.mute_other_apps() {
-            tracing::warn!("静音其他应用失败: {}", e);
-        }
-    }
+    // 录音开始时：增加会话计数并静音其他应用已在 on_start 闭包中间步完成
+    // 此处不再重复执行，避免与 on_stop 的 end_session 产生竞态
+    // 注意：由于 on_start 闭包是同步回调，而 handle_recording_start 是异步的，
+    // 将 begin_session 放在此处会导致以下竞态：
+    // 1. on_start 被调用 → spawn async { handle_recording_start }（未执行）
+    // 2. on_stop 被调用 → end_session()（计数器已为 0，无事发生）
+    // 3. async 块执行 → begin_session() → counter=1 → mute_other_apps()
+    // 4. 用户被永久静音，因为 end_session 已经被调用了
 
     let _ = app.emit("recording_started", ());
 
@@ -2196,6 +2197,18 @@ async fn start_app(
 
         // 注意：剪贴板捕获已移至 on_stop 回调
         // 原因：在 on_start 时物理按键仍被按住，模拟 Ctrl+C 会与 Alt/Meta 等修饰键冲突
+
+        // 录音开始时：增加会话计数并静音其他应用
+        // 必须在 spawn 之前执行（同步），确保与 on_stop 的 end_session 配对正确
+        // 如果放在 spawn 内部，异步调度延迟可能导致 on_stop 先执行 end_session 造成计数器不匹配
+        let audio_mute_manager = Arc::clone(&audio_mute_manager_start);
+        if let Some(ref manager) = *audio_mute_manager.lock().unwrap_or_else(|e| e.into_inner()) {
+            manager.begin_session();
+            // 先 begin_session 增加计数，再执行静音（即使静音失败，计数器也已正确递增）
+            if let Err(e) = manager.mute_other_apps() {
+                tracing::warn!("静音其他应用失败: {}", e);
+            }
+        }
 
         beep_player::play_start_beep();
 
