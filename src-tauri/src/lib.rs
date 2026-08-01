@@ -3983,6 +3983,8 @@ async fn handle_transcription_result(
 
     // 每次转录开始时递增代际（先于取消标志重置，确保旧任务通过代际检查取消）
     let current_gen = state.preset_generation.fetch_add(1, Ordering::SeqCst);
+    // fetch_add 返回旧值，+1 得到当前代际值，用于 spawn 任务与 gen_counter 比较
+    let current_gen = current_gen + 1;
     state.cancel_presets.store(false, Ordering::SeqCst);
     let cancel_flag = Arc::clone(&state.cancel_presets);
     let gen_counter = Arc::clone(&state.preset_generation);
