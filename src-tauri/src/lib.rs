@@ -3912,6 +3912,13 @@ async fn handle_transcription_result(
     // 处理管道结果
     match pipeline_result {
         Ok((result, items)) => {
+            // 在发射事件前，检查是否已有新一轮录音开始
+            // 如果有，则放弃本轮结果发射，避免顶掉新录音的悬浮窗
+            if state.cancel_presets.load(Ordering::SeqCst) {
+                tracing::info!("检测到新一轮录音已开始，放弃本轮结果发射");
+                return;
+            }
+
             // 如果是多结果模式，不隐藏悬浮窗（preset_progress 已在实时更新，或等待用户选择）
             // 如果是单结果模式，隐藏录音悬浮窗
             // 注意：多结果模式下即使 items 只有 1 个（只有原文），也不隐藏，给用户选择机会
