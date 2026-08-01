@@ -1116,9 +1116,11 @@ async fn handle_recording_start(
 ) {
     tracing::info!("检测到快捷键按下");
 
-    // 新录音时取消上一轮残留任务
+    // 新录音时递增代际，使上一轮 pipeline 的 spawn 任务检测到代际变化后自动取消
+    // 不设置 cancel_presets，该标志仅由用户选择结果时（cancel_pending_presets）使用
+    // 设置 cancel_presets 会与本轮 handle_transcription_result 的 store(false) 产生竞态
     let state = app.state::<AppState>();
-    state.cancel_presets.store(true, Ordering::SeqCst);
+    state.preset_generation.fetch_add(1, Ordering::SeqCst);
 
     // 录音开始时：增加会话计数并静音其他应用
     if let Some(ref manager) = *audio_mute_manager.lock().unwrap_or_else(|e| e.into_inner()) {
@@ -3983,7 +3985,6 @@ async fn handle_transcription_result(
 
     // 每次转录开始时递增代际（先于取消标志重置，确保旧任务通过代际检查取消）
     let current_gen = state.preset_generation.fetch_add(1, Ordering::SeqCst);
-    // fetch_add 返回旧值，+1 得到当前代际值，用于 spawn 任务与 gen_counter 比较
     let current_gen = current_gen + 1;
     state.cancel_presets.store(false, Ordering::SeqCst);
     let cancel_flag = Arc::clone(&state.cancel_presets);
