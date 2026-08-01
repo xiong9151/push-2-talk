@@ -3887,7 +3887,17 @@ async fn handle_transcription_result(
     let llm_config = config.llm_config.clone();
     let enable_result_selection = config.enable_result_selection;
 
-    // 每次转录开始时重置取消标志
+    // 检查是否已有新一轮录音开始（handle_recording_start 已设 cancel_presets=true）
+    // 如果是，则放弃本轮处理结果，避免顶掉新录音的悬浮窗
+    if state.cancel_presets.load(Ordering::SeqCst) {
+        tracing::info!("handle_transcription_result: 检测到新一轮录音已开始，放弃本轮结果");
+        // 确保隐藏可能已显示的悬浮窗
+        if let Some(overlay) = app.get_webview_window("overlay") {
+            let _ = overlay.hide();
+        }
+        return;
+    }
+
     // 每次转录开始时重置取消标志并递增代际
     state.cancel_presets.store(false, Ordering::SeqCst);
     let current_gen = state.preset_generation.fetch_add(1, Ordering::SeqCst);
