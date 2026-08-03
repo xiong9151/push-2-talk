@@ -4570,13 +4570,20 @@ async fn select_transcription_result(app_handle: AppHandle, text: String) -> Res
 
     if let Some(ref mut ins) = guard.inserter {
         // 3. 恢复焦点到目标窗口（此时悬浮窗已隐藏，alwaysOnTop 不再干扰）
-        let target_hwnd = *state.target_window_for_insert.lock().unwrap_or_else(|e| e.into_inner());
-        let restore_hwnd = target_hwnd;
-        if let Some(hwnd) = target_hwnd {
-            if crate::win32_input::is_window_valid(hwnd) {
-                crate::win32_input::restore_focus_with_verify(hwnd, 3);
-            }
+        // 优先使用当前前台窗口（overlay 已隐藏，前台窗口应为用户的目标窗口）
+        // 回退到保存的 target_window_for_insert
+        let foreground = crate::win32_input::get_foreground_window();
+        let restore_hwnd = foreground
+            .filter(|hwnd| crate::win32_input::is_window_valid(*hwnd))
+            .or_else(|| {
+                let hwnd = *state.target_window_for_insert.lock().unwrap_or_else(|e| e.into_inner());
+                hwnd.filter(|hwnd| crate::win32_input::is_window_valid(*hwnd))
+            });
+
+        if let Some(hwnd) = restore_hwnd {
+            crate::win32_input::restore_focus_with_verify(hwnd, 3);
         }
+
         // 等待焦点稳定
         tokio::time::sleep(std::time::Duration::from_millis(150)).await;
 
