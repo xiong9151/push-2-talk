@@ -4128,7 +4128,6 @@ async fn handle_transcription_result(
                 if let Some(ref mut ins) = _guard.inserter {
                     let _ = ins.insert_text(&items[0].text);
                 }
-                }
             } else {
                 // 多结果：显示悬浮窗供用户选择
                 // 注意：target_window_for_insert 已在 pipeline 执行前保存（line ~4026）
