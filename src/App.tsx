@@ -329,6 +329,7 @@ function App() {
     setHistory,
     setUsageStats,
     onPolishingFailed: handlePolishingFailed,
+    setResultSelectionEnabled,
   });
 
   // 取消 debounce timer 的回调，供即时保存使用

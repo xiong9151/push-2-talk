@@ -154,10 +154,12 @@ struct AppState {
     is_assistant_processing: Arc<AtomicBool>,
     /// 多结果选择：插入文本时恢复焦点用到的目标窗口句柄
     target_window_for_insert: Arc<Mutex<Option<isize>>>,
-    /// 多结果预设取消标志
-    cancel_presets: Arc<AtomicBool>,
+    /// 多结果预设取消代际：存储请求取消时对应的代际值，仅取消相同代际的任务
+    cancel_generation: Arc<AtomicU64>,
     /// 多结果预设代际计数器：每次录音时递增，用于区分新旧任务
     preset_generation: Arc<AtomicU64>,
+    /// 多结果选择开关（内存缓存，避免每次从磁盘读取）
+    enable_result_selection: Arc<AtomicBool>,
 }
 
 // ================== RAII Guards ==================
@@ -188,16 +190,21 @@ impl Drop for AssistantProcessingGuard<'_> {
 
 /// RAII guard that returns a TextInserter into its Arc<Mutex<Option>> on drop (even on panic).
 /// Prevents the inserter from being permanently lost if code between take() and reassignment panics.
+/// If the app has been stopped, does not return the inserter to prevent reanimating the state.
 struct TextInserterGuard<'a> {
     inserter: Option<TextInserter>,
     target: &'a Arc<Mutex<Option<TextInserter>>>,
+    is_running: &'a Arc<Mutex<bool>>,
 }
 
 impl Drop for TextInserterGuard<'_> {
     fn drop(&mut self) {
         if let Some(ins) = self.inserter.take() {
-            let mut guard = self.target.lock().unwrap_or_else(|e| e.into_inner());
-            *guard = Some(ins);
+            // 如果应用已停止，不再归还 TextInserter，避免逆转 stop_app 的效果
+            if *self.is_running.lock().unwrap_or_else(|e| e.into_inner()) {
+                let mut guard = self.target.lock().unwrap_or_else(|e| e.into_inner());
+                *guard = Some(ins);
+            }
         }
     }
 }
@@ -952,6 +959,10 @@ async fn save_config(
 
     emit_config_updated(&app, &config);
 
+    // 同步 enable_result_selection 到内存缓存
+    let state = app.state::<AppState>();
+    state.enable_result_selection.store(config.enable_result_selection, Ordering::Release);
+
     tracing::info!("[save_config] 配置已保存, theme={}", config.theme);
 
     Ok("配置已保存".to_string())
@@ -1075,6 +1086,9 @@ async fn patch_config_fields(app: AppHandle, patch: ConfigFieldPatch) -> Result<
 
         if let Some(enabled) = patch.enable_result_selection {
             config.enable_result_selection = enabled;
+            // 同步到内存缓存
+            let state = app.state::<AppState>();
+            state.enable_result_selection.store(enabled, Ordering::Release);
         }
 
         if let Some(enabled) = patch.enable_live_transcript {
@@ -1117,8 +1131,8 @@ async fn handle_recording_start(
     tracing::info!("检测到快捷键按下");
 
     // 新录音时递增代际，使上一轮 pipeline 的 spawn 任务检测到代际变化后自动取消
-    // 不设置 cancel_presets，该标志仅由用户选择结果时（cancel_pending_presets）使用
-    // 设置 cancel_presets 会与本轮 handle_transcription_result 的 store(false) 产生竞态
+    // 不设置 cancel_generation，该标志仅由用户选择结果时（cancel_pending_presets）使用
+    // 设置 cancel_generation 会与本轮 handle_transcription_result 的 store(u64::MAX) 产生竞态
     let state = app.state::<AppState>();
     state.preset_generation.fetch_add(1, Ordering::SeqCst);
 
@@ -1851,6 +1865,15 @@ async fn start_app(
     // 确定是否启用词库增强（默认启用）
     let enable_dictionary_enhancement_mode = enable_dictionary_enhancement.unwrap_or(true);
     *state.enable_dictionary_enhancement.lock().unwrap_or_else(|e| e.into_inner()) = enable_dictionary_enhancement_mode;
+
+    // 初始化 enable_result_selection 内存缓存（从磁盘配置读取）
+    {
+        let config = load_persisted_config().unwrap_or_else(|e| {
+            tracing::warn!("加载配置失败: {}", e);
+            AppConfig::new()
+        });
+        state.enable_result_selection.store(config.enable_result_selection, Ordering::Release);
+    }
 
     tracing::info!(
         "ASR 模式: {}",
@@ -3989,19 +4012,27 @@ async fn handle_transcription_result(
     let enable_post_process = { *state.enable_post_process.lock().unwrap_or_else(|e| e.into_inner()) };
     let enable_dictionary_enhancement = { *state.enable_dictionary_enhancement.lock().unwrap_or_else(|e| e.into_inner()) };
 
-    // 读取 TNL 开关和 LLM 配置（避免 pipeline 内做同步文件 I/O）
-    // 使用 load_persisted_config 持有 CONFIG_LOCK 读取配置文件，避免与 save_config 竞态
+    // 读取 TNL 开关和 LLM 配置
     let config = load_persisted_config().unwrap_or(AppConfig::new());
     let tnl_enabled = config.tnl_config.enabled;
     let llm_config = config.llm_config.clone();
-    let enable_result_selection = config.enable_result_selection;
+
+    // 从内存缓存读取 enable_result_selection（避免每次从磁盘读取 CONFIG_LOCK 造成的竞态）
+    let enable_result_selection = state.enable_result_selection.load(Ordering::Acquire);
 
     // 每次转录开始时递增代际（先于取消标志重置，确保旧任务通过代际检查取消）
     let current_gen = state.preset_generation.fetch_add(1, Ordering::SeqCst);
     let current_gen = current_gen + 1;
-    state.cancel_presets.store(false, Ordering::SeqCst);
-    let cancel_flag = Arc::clone(&state.cancel_presets);
+    // 重置取消代际，使新录音不受旧 cancel 请求影响
+    state.cancel_generation.store(u64::MAX, Ordering::Release);
+    let cancel_gen = Arc::clone(&state.cancel_generation);
     let gen_counter = Arc::clone(&state.preset_generation);
+
+    // 保存 target_window_for_insert 到 state（在 pipeline 执行之前，确保用户快速点击结果时能获取到正确句柄）
+    {
+        let mut hwnd_guard = state.target_window_for_insert.lock().unwrap_or_else(|e| e.into_inner());
+        *hwnd_guard = target_hwnd;
+    }
 
     // 听写模式：只使用 NormalPipeline
     let pipeline = NormalPipeline::new();
@@ -4019,7 +4050,7 @@ async fn handle_transcription_result(
             tnl_enabled,
             Some(&llm_config),
             enable_result_selection,
-            cancel_flag,
+            cancel_gen,
             gen_counter,
             current_gen,
         )
@@ -4092,15 +4123,15 @@ async fn handle_transcription_result(
                 let mut _guard = TextInserterGuard {
                     inserter,
                     target: &text_inserter,
+                    is_running: &state.is_running,
                 };
                 if let Some(ref mut ins) = _guard.inserter {
                     let _ = ins.insert_text(&items[0].text);
                 }
+                }
             } else {
                 // 多结果：显示悬浮窗供用户选择
-                // 保存 target_hwnd 用于后续文本插入时的焦点恢复
-                let mut hwnd_guard = state.target_window_for_insert.lock().unwrap_or_else(|e| e.into_inner());
-                *hwnd_guard = target_hwnd;
+                // 注意：target_window_for_insert 已在 pipeline 执行前保存（line ~4026）
                 // 在预设进度模式下，悬浮窗已通过 preset_progress 事件显示
                 // 无需再次调用 overlay.show()，否则会导致闪烁
                 // 仅在非预设进度模式（传统多结果）下需要显示
@@ -4317,8 +4348,10 @@ async fn cancel_transcription(app_handle: AppHandle) -> Result<String, String> {
 /// 取消正在进行的多预设 LLM 处理
 #[tauri::command]
 async fn cancel_pending_presets(state: tauri::State<'_, AppState>) -> Result<String, String> {
-    state.cancel_presets.store(true, Ordering::SeqCst);
-    tracing::info!("已取消所有待处理的预设任务");
+    // 记录当前代际值，pipeline 检查时只对相同代际的 cancel 请求响应
+    let current_gen = state.preset_generation.load(Ordering::Acquire);
+    state.cancel_generation.store(current_gen, Ordering::Release);
+    tracing::info!("已取消代际 {} 的所有待处理的预设任务", current_gen);
     Ok("已取消".to_string())
 }
 
@@ -4520,17 +4553,24 @@ async fn show_overlay(app_handle: AppHandle) -> Result<(), String> {
 async fn select_transcription_result(app_handle: AppHandle, text: String) -> Result<String, String> {
     tracing::info!("用户选择转录结果: {}", text);
 
-    // 获取 text_inserter 并插入文本
+    // 1. 先隐藏悬浮窗，移除 alwaysOnTop 干扰，确保目标窗口能获得焦点
+    if let Some(overlay) = app_handle.get_webview_window("overlay") {
+        let _ = overlay.hide();
+    }
+    tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+    // 2. 获取 text_inserter 并插入文本
     let state = app_handle.state::<AppState>();
     let inserter = { state.text_inserter.lock().unwrap_or_else(|e| e.into_inner()).take() };
     // Use TextInserterGuard to ensure the inserter is returned even on panic
     let mut guard = TextInserterGuard {
         inserter,
         target: &state.text_inserter,
+        is_running: &state.is_running,
     };
 
     if let Some(ref mut ins) = guard.inserter {
-        // 先恢复焦点到目标窗口
+        // 3. 恢复焦点到目标窗口（此时悬浮窗已隐藏，alwaysOnTop 不再干扰）
         let target_hwnd = *state.target_window_for_insert.lock().unwrap_or_else(|e| e.into_inner());
         let restore_hwnd = target_hwnd;
         if let Some(hwnd) = target_hwnd {
@@ -4565,10 +4605,7 @@ async fn select_transcription_result(app_handle: AppHandle, text: String) -> Res
         tracing::warn!("select_transcription_result: TextInserter 未初始化");
     }
 
-    // 隐藏悬浮窗
-    if let Some(overlay) = app_handle.get_webview_window("overlay") {
-        let _ = overlay.hide();
-    }
+    // 注意：悬浮窗已在步骤 1 中隐藏，此处不再重复隐藏
 
     Ok("ok".to_string())
 }
@@ -5650,8 +5687,9 @@ pub fn run() {
                 conversation_session: Arc::new(Mutex::new(None)),
                 is_assistant_processing: Arc::new(AtomicBool::new(false)),
                 target_window_for_insert: Arc::new(Mutex::new(None)),
-                cancel_presets: Arc::new(AtomicBool::new(false)),
+                cancel_generation: Arc::new(AtomicU64::new(u64::MAX)),
                 preset_generation: Arc::new(AtomicU64::new(0)),
+                enable_result_selection: Arc::new(AtomicBool::new(false)),
             };
 
             // 预初始化音频播放器，消除首次按键提示音延迟

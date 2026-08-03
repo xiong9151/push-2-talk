@@ -374,6 +374,7 @@ export default function OverlayWindow() {
     setIsSubmitting(true);
     try {
       await invoke("select_transcription_result", { text: item.text });
+      // select_transcription_result 内部会隐藏悬浮窗
       // 重置状态
       setStatus("recording");
       setResultItems([]);
@@ -392,12 +393,10 @@ export default function OverlayWindow() {
     try {
       // 取消其他未完成的任务
       await invoke("cancel_pending_presets");
-      // 选中该结果
+      // 选中该结果（select_transcription_result 内部会隐藏悬浮窗）
       if (presetResults[index].text) {
         await invoke("select_transcription_result", { text: presetResults[index].text });
       }
-      // 隐藏悬浮窗（清除残留的胶囊）
-      await invoke("hide_overlay");
       // 重置所有状态，供下一轮录音使用
       hasSelectedResultRef.current = false;
       hasEnteredResultsRef.current = false;

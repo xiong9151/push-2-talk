@@ -60,6 +60,7 @@ export type UseTauriEventListenersParams = {
   setDualHotkeyConfig?: React.Dispatch<React.SetStateAction<DualHotkeyConfig>>;
   setBuiltinDictionaryDomains?: React.Dispatch<React.SetStateAction<string[]>>;
   setCustomAsrProviders?: React.Dispatch<React.SetStateAction<CustomAsrProvider[]>>;
+  setResultSelectionEnabled?: React.Dispatch<React.SetStateAction<boolean>>;
   onExternalConfigUpdated?: (config: AppConfig) => void;
   onBuiltinDictionaryUpdated?: () => void;
 
@@ -100,6 +101,7 @@ export function useTauriEventListeners({
   setDualHotkeyConfig,
   setBuiltinDictionaryDomains,
   setCustomAsrProviders,
+  setResultSelectionEnabled,
   onExternalConfigUpdated,
   onBuiltinDictionaryUpdated,
   setHistory,
@@ -319,6 +321,8 @@ export function useTauriEventListeners({
           if (setCustomAsrProviders && config.custom_asr_providers) {
             setCustomAsrProviders(config.custom_asr_providers);
           }
+
+          setResultSelectionEnabled?.(config.enable_result_selection ?? false);
         }))) return;
 
         if (!(await registerListener("builtin_dictionary_updated", async () => {
@@ -402,6 +406,7 @@ export function useTauriEventListeners({
     setDictionary,
     setDualHotkeyConfig,
     setBuiltinDictionaryDomains,
+    setResultSelectionEnabled,
     onExternalConfigUpdated,
     onBuiltinDictionaryUpdated,
     setShowCloseDialog,

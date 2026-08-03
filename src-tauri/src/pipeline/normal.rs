@@ -8,7 +8,7 @@
 
 use anyhow::Result;
 use serde_json;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tauri::{AppHandle, Emitter};
@@ -51,7 +51,7 @@ impl NormalPipeline {
         tnl_enabled: bool,
         llm_config: Option<&crate::config::LlmConfig>,
         enable_result_selection: bool,
-        cancel_flag: Arc<AtomicBool>,
+        cancel_gen: Arc<AtomicU64>,
         gen_counter: Arc<AtomicU64>,
         preset_gen: u64,
     ) -> Result<(PipelineResult, Vec<TranscriptionResultItem>)> {
@@ -99,7 +99,7 @@ impl NormalPipeline {
             &text,
             llm_config,
             enable_result_selection,
-            cancel_flag,
+            cancel_gen,
             gen_counter,
             preset_gen,
         )
@@ -231,7 +231,7 @@ impl NormalPipeline {
         text: &str,
         llm_config: Option<&crate::config::LlmConfig>,
         enable_result_selection: bool,
-        cancel_flag: Arc<AtomicBool>,
+        cancel_gen: Arc<AtomicU64>,
         gen_counter: Arc<AtomicU64>,
         preset_gen: u64,
     ) -> (Vec<TranscriptionResultItem>, String, Option<String>, Option<u64>) {
@@ -263,7 +263,7 @@ impl NormalPipeline {
             && presets.iter().any(|p| p.selected_for_display);
 
         if do_multi {
-            Self::run_multi_presets(app, processor_inner, text, dictionary, enable_post_process, enable_dictionary_enhancement, &presets, &mut items, cancel_flag, gen_counter, preset_gen).await
+            Self::run_multi_presets(app, processor_inner, text, dictionary, enable_post_process, enable_dictionary_enhancement, &presets, &mut items, cancel_gen, gen_counter, preset_gen).await
         } else {
             Self::run_single_preset(app, processor_inner, text, dictionary, enable_post_process, enable_dictionary_enhancement, &mut items).await
         }
@@ -279,7 +279,7 @@ impl NormalPipeline {
         enable_dictionary_enhancement: bool,
         presets: &[crate::config::LlmPreset],
         items: &mut Vec<TranscriptionResultItem>,
-        cancel_flag: Arc<AtomicBool>,
+        cancel_gen: Arc<AtomicU64>,
         gen_counter: Arc<AtomicU64>,
         preset_gen: u64,
     ) -> (Vec<TranscriptionResultItem>, String, Option<String>, Option<u64>) {
@@ -313,18 +313,18 @@ impl NormalPipeline {
             let d = dictionary.to_vec();
             let pc = (*preset).clone();
             let app_clone = app.clone();
-            let cancel = Arc::clone(&cancel_flag);
+            let cancel = Arc::clone(&cancel_gen);
             let gen = preset_gen;
             let gen_counter_inner = Arc::clone(&gen_counter);
             handles.push(tokio::spawn(async move {
                 let start = Instant::now();
-                // 检查是否已被取消或代际已过期（上一轮残留任务自动取消）
-                if cancel.load(Ordering::Acquire) || gen_counter_inner.load(Ordering::Acquire) != gen {
+                // 检查是否已被取消（cancel_gen 等于当前代际表示被取消）
+                if cancel.load(Ordering::Acquire) == gen || gen_counter_inner.load(Ordering::Acquire) != gen {
                     return (pc, None, start.elapsed().as_millis() as u64);
                 }
                 let result = p.polish_with_preset(&t, &d, enable_post_process, enable_dictionary_enhancement, &pc).await;
-                // 任务完成后再次检查取消和代际，防止上一轮任务在新一轮中错误发射
-                if cancel.load(Ordering::Acquire) || gen_counter_inner.load(Ordering::Acquire) != gen {
+                // 任务完成后再次检查
+                if cancel.load(Ordering::Acquire) == gen || gen_counter_inner.load(Ordering::Acquire) != gen {
                     return (pc, None, start.elapsed().as_millis() as u64);
                 }
                 // 立即发射结果事件

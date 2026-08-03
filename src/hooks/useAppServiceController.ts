@@ -336,7 +336,7 @@ export function useAppServiceController({
         builtinDictionaryDomains: finalBuiltinDictionaryDomains,
         theme: finalTheme,
         customAsrProviders: overrides.customAsrProviders ?? customAsrProviders ?? [],
-        enableResultSelection: overrides.enableResultSelection ?? false,
+        enableResultSelection: overrides.enableResultSelection ?? (llmConfig.presets.length > 0 && llmConfig.presets.some((p) => p.selected_for_display)),
       };
     },
     [
