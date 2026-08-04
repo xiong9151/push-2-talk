@@ -126,6 +126,8 @@ struct AppState {
     current_trigger_mode: Arc<Mutex<Option<config::TriggerMode>>>,
     /// 松手模式：录音是否已锁定
     is_recording_locked: Arc<AtomicBool>,
+    /// 松手模式：录音是否正在录制中（用于 on_start 防重入）
+    is_recording_active: Arc<AtomicBool>,
     /// 松手模式：长按检测定时器句柄
     lock_timer_handle: Arc<Mutex<Option<tauri::async_runtime::JoinHandle<()>>>>,
     /// 松手模式：录音开始时间（用于竞态条件检查）
@@ -2155,6 +2157,7 @@ async fn start_app(
 
     // 松手模式相关变量（用于 on_start）
     let is_recording_locked_start = Arc::clone(&state.is_recording_locked);
+    let is_recording_active_start = Arc::clone(&state.is_recording_active);
     let _lock_timer_handle_start = Arc::clone(&state.lock_timer_handle);
     let _recording_start_time_start = Arc::clone(&state.recording_start_time);
     let _dual_hotkey_cfg_start = dual_hotkey_cfg.clone();
@@ -2164,6 +2167,7 @@ async fn start_app(
     let lock_timer_handle_stop = Arc::clone(&state.lock_timer_handle);
     let recording_start_time_stop = Arc::clone(&state.recording_start_time);
     let is_processing_stop_stop = Arc::clone(&state.is_processing_stop);
+    let is_recording_active_stop = Arc::clone(&state.is_recording_active);
 
     // 音频静音管理器（用于 on_start 和 on_stop）
     let audio_mute_manager_start = Arc::clone(&state.audio_mute_manager);
@@ -2179,12 +2183,18 @@ async fn start_app(
 
     // 按键按下回调（支持双模式 + 松手模式）
     let on_start = move |trigger_mode: config::TriggerMode, is_release_mode: bool| {
-        // === 防重入检查必须在保存窗口句柄之前 ===
-        // 避免松手模式下误触热键覆盖正确的目标窗口句柄
+        // === 防重入检查 ===
+        // 如果已在录制中（async 录音任务已启动但尚未完成），忽略新的按键触发
         if is_recording_locked_start.load(Ordering::SeqCst) {
             tracing::info!("当前处于松手锁定模式，忽略新的按键触发");
             return;
         }
+        if is_recording_active_start.load(Ordering::SeqCst) {
+            tracing::info!("当前正在录音中，忽略新的按键触发");
+            return;
+        }
+        // 设置活跃标志（在 spawn 之前同步设置，确保 on_stop 释放前不会被再次触发）
+        is_recording_active_start.store(true, Ordering::SeqCst);
 
         if !*is_running_start.lock().unwrap_or_else(|e| e.into_inner()) {
             tracing::debug!("服务已停止，忽略快捷键按下事件");
@@ -2396,6 +2406,19 @@ async fn start_app(
             // ProcessingStopGuard 在闭包内持有，确保 is_processing_stop 在整个流水线处理期间保持 true
             let _stop_guard_inner = ProcessingStopGuard { flag: &*is_processing_stop };
             let _ = app.emit("recording_stopped", ());
+
+            // 在 async 处理完成后释放 is_recording_active，允许新的录音触发
+            // 使用 defer 机制确保在 async 块结束时执行，无论成功还是失败
+            // 注意：这里使用 scopeguard 或简单的 drop guard 来实现
+            struct RecordingActiveGuard<'a> {
+                flag: &'a AtomicBool,
+            }
+            impl Drop for RecordingActiveGuard<'_> {
+                fn drop(&mut self) {
+                    self.flag.store(false, Ordering::SeqCst);
+                }
+            }
+            let _recording_active_guard = RecordingActiveGuard { flag: &*is_recording_active_stop };
 
             match trigger_mode {
                 config::TriggerMode::Dictation => {
@@ -5679,6 +5702,7 @@ pub fn run() {
                 hotkey_service: Arc::new(HotkeyService::new()),
                 current_trigger_mode: Arc::new(Mutex::new(None)),
                 is_recording_locked: Arc::new(AtomicBool::new(false)),
+                is_recording_active: Arc::new(AtomicBool::new(false)),
                 lock_timer_handle: Arc::new(Mutex::new(None)),
                 recording_start_time: Arc::new(Mutex::new(None)),
                 is_processing_stop: Arc::new(AtomicBool::new(false)),
