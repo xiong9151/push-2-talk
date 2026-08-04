@@ -211,6 +211,18 @@ impl Drop for TextInserterGuard<'_> {
     }
 }
 
+/// RAII guard that resets is_recording_active to false on drop.
+/// Used in the on_stop async block to signal that recording has fully completed.
+struct RecordingActiveGuard {
+    flag: Arc<AtomicBool>,
+}
+
+impl Drop for RecordingActiveGuard {
+    fn drop(&mut self) {
+        self.flag.store(false, Ordering::SeqCst);
+    }
+}
+
 // ================== 多轮对话数据结构 ==================
 
 /// 对话提示词模式（首轮锁定，追问不变）
@@ -2362,6 +2374,7 @@ async fn start_app(
         }
         // 克隆 is_processing_stop_stop 以便在 async 块内持有 guard
         let is_processing_stop = Arc::clone(&is_processing_stop_stop);
+        let is_recording_active_inner = Arc::clone(&is_recording_active_stop);
 
         tracing::info!("检测到快捷键释放，模式: {:?}", trigger_mode);
 
@@ -2408,17 +2421,8 @@ async fn start_app(
             let _ = app.emit("recording_stopped", ());
 
             // 在 async 处理完成后释放 is_recording_active，允许新的录音触发
-            // 使用 defer 机制确保在 async 块结束时执行，无论成功还是失败
-            // 注意：这里使用 scopeguard 或简单的 drop guard 来实现
-            struct RecordingActiveGuard<'a> {
-                flag: &'a AtomicBool,
-            }
-            impl Drop for RecordingActiveGuard<'_> {
-                fn drop(&mut self) {
-                    self.flag.store(false, Ordering::SeqCst);
-                }
-            }
-            let _recording_active_guard = RecordingActiveGuard { flag: &*is_recording_active_stop };
+            // 使用 RAII guard 确保在 async 块结束时执行，无论成功还是失败
+            let _recording_active_guard = RecordingActiveGuard { flag: is_recording_active_inner.clone() };
 
             match trigger_mode {
                 config::TriggerMode::Dictation => {
