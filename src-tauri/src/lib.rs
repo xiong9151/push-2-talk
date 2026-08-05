@@ -126,8 +126,6 @@ struct AppState {
     current_trigger_mode: Arc<Mutex<Option<config::TriggerMode>>>,
     /// 松手模式：录音是否已锁定
     is_recording_locked: Arc<AtomicBool>,
-    /// 通用防重入标志：录音是否正在活跃中（用于 on_start 防重入，在 spawn 前同步设置，在 on_stop 同步释放）
-    is_recording_active: Arc<AtomicBool>,
     /// 松手模式：长按检测定时器句柄
     lock_timer_handle: Arc<Mutex<Option<tauri::async_runtime::JoinHandle<()>>>>,
     /// 松手模式：录音开始时间（用于竞态条件检查）
@@ -208,19 +206,6 @@ impl Drop for TextInserterGuard<'_> {
                 *guard = Some(ins);
             }
         }
-    }
-}
-
-/// RAII guard that resets is_recording_active to false on drop (even on panic).
-/// Holds Arc<AtomicBool> (not a reference) so it can be moved into async blocks
-/// while satisfying the Fn trait requirement of hotkey_service callbacks.
-struct RecordingActiveGuard {
-    flag: Arc<AtomicBool>,
-}
-
-impl Drop for RecordingActiveGuard {
-    fn drop(&mut self) {
-        self.flag.store(false, Ordering::SeqCst);
     }
 }
 
@@ -2170,14 +2155,12 @@ async fn start_app(
 
     // 松手模式相关变量（用于 on_start）
     let is_recording_locked_start = Arc::clone(&state.is_recording_locked);
-    let is_recording_active_start = Arc::clone(&state.is_recording_active);
     let _lock_timer_handle_start = Arc::clone(&state.lock_timer_handle);
     let _recording_start_time_start = Arc::clone(&state.recording_start_time);
     let _dual_hotkey_cfg_start = dual_hotkey_cfg.clone();
 
     // 松手模式相关变量（用于 on_stop）
     let is_recording_locked_stop = Arc::clone(&state.is_recording_locked);
-    let is_recording_active_stop = Arc::clone(&state.is_recording_active);
     let lock_timer_handle_stop = Arc::clone(&state.lock_timer_handle);
     let recording_start_time_stop = Arc::clone(&state.recording_start_time);
     let is_processing_stop_stop = Arc::clone(&state.is_processing_stop);
@@ -2196,36 +2179,23 @@ async fn start_app(
 
     // 按键按下回调（支持双模式 + 松手模式）
     let on_start = move |trigger_mode: config::TriggerMode, is_release_mode: bool| {
-        // === 检查 is_running（无副作用，必须最先执行，防止泄漏 is_recording_active）===
-        if !*is_running_start.lock().unwrap_or_else(|e| e.into_inner()) {
-            tracing::debug!("服务已停止，忽略快捷键按下事件");
-            return;
-        }
-
-        // === 防重入检查 ===
-        // 如果已在录制中（async 录音任务已启动但尚未完成），忽略新的按键触发
+        // === 防重入检查必须在保存窗口句柄之前 ===
+        // 避免松手模式下误触热键覆盖正确的目标窗口句柄
         if is_recording_locked_start.load(Ordering::SeqCst) {
             tracing::info!("当前处于松手锁定模式，忽略新的按键触发");
             return;
         }
 
+        if !*is_running_start.lock().unwrap_or_else(|e| e.into_inner()) {
+            tracing::debug!("服务已停止，忽略快捷键按下事件");
+            return;
+        }
+
         // === AI 助手处理中阻止重复触发（R8）===
-        // 必须在 compare_exchange is_recording_active 之前执行，否则设置标志后返回会泄漏标志
         if trigger_mode == config::TriggerMode::AiAssistant
             && is_assistant_processing_start.load(Ordering::SeqCst)
         {
             tracing::info!("AI 助手正在处理中，忽略重复触发");
-            return;
-        }
-
-        // 设置活跃标志（在 spawn 之前同步设置，确保 on_stop 释放前不会被再次触发）
-        // 使用 compare_exchange 原子操作，避免 load-then-store 的 TOCTOU 竞态
-        // 注意：此标志必须在所有可能提前返回的检查之后设置，否则会导致标志泄漏
-        if is_recording_active_start
-            .compare_exchange(false, true, Ordering::SeqCst, Ordering::SeqCst)
-            .is_err()
-        {
-            tracing::info!("当前正在录音中，忽略新的按键触发");
             return;
         }
 
@@ -2382,8 +2352,6 @@ async fn start_app(
         }
         // 克隆 is_processing_stop_stop 以便在 async 块内持有 guard
         let is_processing_stop = Arc::clone(&is_processing_stop_stop);
-        // 克隆 is_recording_active_stop 以便在 async 块内持有 guard
-        let is_recording_active = Arc::clone(&is_recording_active_stop);
 
         tracing::info!("检测到快捷键释放，模式: {:?}", trigger_mode);
 
@@ -2427,9 +2395,6 @@ async fn start_app(
         tauri::async_runtime::spawn(async move {
             // ProcessingStopGuard 在闭包内持有，确保 is_processing_stop 在整个流水线处理期间保持 true
             let _stop_guard_inner = ProcessingStopGuard { flag: &*is_processing_stop };
-            // 在 async 处理完成后释放 is_recording_active，允许新的录音触发
-            // 使用 Arc<AtomicBool> 而非引用，确保 Fn 闭包约束得到满足
-            let _recording_active_guard = RecordingActiveGuard { flag: is_recording_active };
             let _ = app.emit("recording_stopped", ());
 
             match trigger_mode {
@@ -4258,7 +4223,6 @@ async fn stop_app(app_handle: AppHandle) -> Result<String, String> {
     // 清理 AI 助手会话状态并隐藏结果面板
     state.conversation_session.lock().unwrap_or_else(|e| e.into_inner()).take();
     state.is_assistant_processing.store(false, Ordering::SeqCst);
-    state.is_recording_active.store(false, Ordering::SeqCst);
     hide_result_panel_window(&app_handle).await;
 
     *state.is_running.lock().unwrap_or_else(|e| e.into_inner()) = false;
@@ -4419,9 +4383,6 @@ async fn finish_locked_recording(app_handle: AppHandle) -> Result<String, String
 
     // 清除锁定状态
     state.is_recording_locked.store(false, Ordering::SeqCst);
-    // 注意：不在这里释放 is_recording_active，使用 RAII guard 在函数结束时释放
-    // 确保 pipeline 处理期间新的 on_start 不会触发
-    let _recording_active_guard = RecordingActiveGuard { flag: Arc::clone(&state.is_recording_active) };
     *state.recording_start_time.lock().unwrap_or_else(|e| e.into_inner()) = None;
 
     // 重置热键服务状态（防止状态卡死）
@@ -4551,9 +4512,6 @@ async fn cancel_locked_recording(app_handle: AppHandle) -> Result<String, String
 
     // 清除锁定状态
     state.is_recording_locked.store(false, Ordering::SeqCst);
-    // 注意：不在这里释放 is_recording_active，使用 RAII guard 在函数结束时释放
-    // 确保 pipeline 处理期间新的 on_start 不会触发
-    let _recording_active_guard = RecordingActiveGuard { flag: Arc::clone(&state.is_recording_active) };
     *state.recording_start_time.lock().unwrap_or_else(|e| e.into_inner()) = None;
     *state.current_trigger_mode.lock().unwrap_or_else(|e| e.into_inner()) = None;
 
@@ -5721,7 +5679,6 @@ pub fn run() {
                 hotkey_service: Arc::new(HotkeyService::new()),
                 current_trigger_mode: Arc::new(Mutex::new(None)),
                 is_recording_locked: Arc::new(AtomicBool::new(false)),
-                is_recording_active: Arc::new(AtomicBool::new(false)),
                 lock_timer_handle: Arc::new(Mutex::new(None)),
                 recording_start_time: Arc::new(Mutex::new(None)),
                 is_processing_stop: Arc::new(AtomicBool::new(false)),
