@@ -2158,6 +2158,8 @@ async fn start_app(
     let _lock_timer_handle_start = Arc::clone(&state.lock_timer_handle);
     let _recording_start_time_start = Arc::clone(&state.recording_start_time);
     let _dual_hotkey_cfg_start = dual_hotkey_cfg.clone();
+    let is_processing_stop_start = Arc::clone(&state.is_processing_stop);
+    let preset_generation_start = Arc::clone(&state.preset_generation);
 
     // 松手模式相关变量（用于 on_stop）
     let is_recording_locked_stop = Arc::clone(&state.is_recording_locked);
@@ -2179,6 +2181,11 @@ async fn start_app(
 
     // 按键按下回调（支持双模式 + 松手模式）
     let on_start = move |trigger_mode: config::TriggerMode, is_release_mode: bool| {
+        // 重置 is_processing_stop，允许新的 on_stop 正常执行
+        // 快速连按时，以最后一次录音为准，前一次 pipeline 通过代际检测自动放弃
+        is_processing_stop_start.store(false, Ordering::SeqCst);
+        preset_generation_start.fetch_add(1, Ordering::SeqCst);
+
         // === 防重入检查必须在保存窗口句柄之前 ===
         // 避免松手模式下误触热键覆盖正确的目标窗口句柄
         if is_recording_locked_start.load(Ordering::SeqCst) {
