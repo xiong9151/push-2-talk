@@ -142,6 +142,7 @@ function App() {
   const [enableAutostart, setEnableAutostart] = useState(false);
   const [enableMuteOtherApps, setEnableMuteOtherApps] = useState(false);
   const [enableLiveTranscript, setEnableLiveTranscript] = useState(false);
+  const [enableResultSelection, setEnableResultSelection] = useState(false);
   const [enableAudioDebug, setEnableAudioDebug] = useState(false);
   const [theme, setTheme] = useState("light");
   const [closeAction, setCloseAction] = useState<"close" | "minimize" | null>(null);
@@ -924,9 +925,9 @@ function App() {
             onSetEnableMuteOtherApps={async (next) => {
               await saveFieldPatchWithStatus({ enableMuteOtherApps: next });
             }}
-            enableLiveTranscript={enableLiveTranscript}
-            onSetEnableLiveTranscript={async (next) => {
-              await saveFieldPatchWithStatus({ enableLiveTranscript: next });
+            enableResultSelection={enableResultSelection}
+            onSetEnableResultSelection={async (next) => {
+              await saveFieldPatchWithStatus({ enableResultSelection: next });
             }}
             enableAudioDebug={enableAudioDebug}
             onSetEnableAudioDebug={async (next) => {

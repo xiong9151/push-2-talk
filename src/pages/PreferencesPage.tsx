@@ -16,8 +16,8 @@ export type PreferencesPageProps = {
   enableMuteOtherApps: boolean;
   onSetEnableMuteOtherApps: (next: boolean) => Promise<void>;
 
-  enableLiveTranscript: boolean;
-  onSetEnableLiveTranscript: (next: boolean) => Promise<void>;
+  enableResultSelection: boolean;
+  onSetEnableResultSelection: (next: boolean) => Promise<void>;
 
   enableAudioDebug: boolean;
   onSetEnableAudioDebug: (next: boolean) => Promise<void>;
@@ -44,8 +44,8 @@ export function PreferencesPage({
   onToggleAutostart,
   enableMuteOtherApps,
   onSetEnableMuteOtherApps,
-  enableLiveTranscript,
-  onSetEnableLiveTranscript,
+  enableResultSelection,
+  onSetEnableResultSelection,
   enableAudioDebug,
   onSetEnableAudioDebug,
   theme,
@@ -274,13 +274,13 @@ export function PreferencesPage({
           />
         </div>
 
-        {/* 实时显示转录 */}
+        {/* 结果选择窗口 */}
         <div className="flex items-center justify-between p-4 bg-[var(--paper)] border border-[var(--stone)] rounded-2xl">
           <div className="flex items-center gap-3">
             <div
               className={[
                 "p-2 rounded-xl",
-                enableLiveTranscript
+                enableResultSelection
                   ? "bg-[rgba(106,155,204,0.12)] text-[var(--steel)]"
                   : "bg-white border border-[var(--stone)] text-stone-500",
               ].join(" ")}
@@ -288,16 +288,16 @@ export function PreferencesPage({
               <MessageSquareQuote size={16} />
             </div>
             <div>
-              <div className="text-sm font-bold text-[var(--ink)]">实时显示转录</div>
+              <div className="text-sm font-bold text-[var(--ink)]">结果选择窗口</div>
               <div className="text-[11px] text-stone-400 font-semibold">
-                录音时在悬浮窗中显示实时 ASR 文本
+                关闭后转录结果直接上屏，不显示悬浮窗选择
               </div>
             </div>
           </div>
           <Toggle
-            checked={enableLiveTranscript}
+            checked={enableResultSelection}
             onCheckedChange={(next) => {
-              void onSetEnableLiveTranscript(next);
+              void onSetEnableResultSelection(next);
             }}
             disabled={status === "recording" || status === "transcribing"}
             size="sm"
