@@ -160,6 +160,8 @@ struct AppState {
     preset_generation: Arc<AtomicU64>,
     /// 多结果选择开关（内存缓存，避免每次从磁盘读取）
     enable_result_selection: Arc<AtomicBool>,
+    /// 最近一次录制的音频数据（WAV 格式，用于录音诊断播放）
+    recorded_audio: Arc<Mutex<Option<Vec<u8>>>>,
 }
 
 // ================== RAII Guards ==================
@@ -417,6 +419,7 @@ fn emit_config_updated(app: &AppHandle, config: &AppConfig) {
     let theme_payload = serde_json::json!({
         "theme": config.theme,
         "enable_live_transcript": config.enable_live_transcript,
+        "enable_audio_debug": config.enable_audio_debug,
     });
     let _ = app.emit("config_updated_light", theme_payload);
 }
@@ -833,6 +836,7 @@ struct ConfigFieldPatch {
     close_action: Option<Option<String>>,
     enable_result_selection: Option<bool>,
     enable_live_transcript: Option<bool>,
+    enable_audio_debug: Option<bool>,
 }
 
 // Tauri Commands
@@ -951,6 +955,7 @@ async fn save_config(
             enable_result_selection: enable_result_selection.unwrap_or(existing.enable_result_selection),
             selected_result_preset_ids: existing.selected_result_preset_ids.clone(),
             enable_live_transcript: existing.enable_live_transcript,
+            enable_audio_debug: existing.enable_audio_debug,
         };
 
         Ok(())
@@ -1093,6 +1098,10 @@ async fn patch_config_fields(app: AppHandle, patch: ConfigFieldPatch) -> Result<
 
         if let Some(enabled) = patch.enable_live_transcript {
             config.enable_live_transcript = enabled;
+        }
+
+        if let Some(enabled) = patch.enable_audio_debug {
+            config.enable_audio_debug = enabled;
         }
 
         Ok(())
@@ -1677,13 +1686,18 @@ async fn handle_qwen_realtime_start(
 
             // 提取实时转录接收器并启动转发任务
             let live_transcript_rx = session.live_transcript_rx.take();
-            if let Some(mut rx) = live_transcript_rx {
-                let app_for_live = app.clone();
-                tokio::spawn(async move {
-                    while let Some(partial) = rx.recv().await {
-                        let _ = app_for_live.emit("live_transcript", &partial);
-                    }
-                });
+            let enable_live = load_persisted_config()
+                .map(|c| c.enable_live_transcript)
+                .unwrap_or(false);
+            if enable_live {
+                if let Some(mut rx) = live_transcript_rx {
+                    let app_for_live = app.clone();
+                    tokio::spawn(async move {
+                        while let Some(partial) = rx.recv().await {
+                            let _ = app_for_live.emit("live_transcript", &partial);
+                        }
+                    });
+                }
             }
 
             let start_result = {
@@ -3272,6 +3286,15 @@ async fn handle_http_transcription(
         None => None,
     };
 
+    // 保存录音数据用于诊断播放
+    if let Some(ref data) = audio_data {
+        *app
+            .state::<AppState>()
+            .recorded_audio
+            .lock()
+            .unwrap_or_else(|e| e.into_inner()) = Some(data.clone());
+    }
+
     if let Some(audio_data) = audio_data {
         let _ = app.emit("transcribing", ());
 
@@ -3720,6 +3743,13 @@ async fn fallback_transcription(
     usage_stats: Arc<Mutex<UsageStats>>,
     recording_start_instant: Arc<Mutex<Option<std::time::Instant>>>,
 ) {
+    // 保存录音数据用于诊断播放
+    *app
+        .state::<AppState>()
+        .recorded_audio
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = Some(audio_data.clone());
+
     let qwen = { qwen_client_state.lock().unwrap_or_else(|e| e.into_inner()).clone() };
     let sensevoice = { sensevoice_client_state.lock().unwrap_or_else(|e| e.into_inner()).clone() };
     let doubao = { doubao_client_state.lock().unwrap_or_else(|e| e.into_inner()).clone() };
@@ -5581,6 +5611,32 @@ async fn test_custom_asr(config: config::CustomAsrProvider) -> Result<String, St
     }
 }
 
+/// 播放最近一次录制的录音（用于录音诊断）
+#[tauri::command]
+async fn play_recorded_audio(state: tauri::State<'_, AppState>) -> Result<String, String> {
+    let audio_data = state.recorded_audio.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    match audio_data {
+        Some(data) => {
+            // 写入临时文件
+            let temp_dir = std::env::temp_dir();
+            let path = temp_dir.join("pushtotalk_debug.wav");
+            std::fs::write(&path, &data).map_err(|e| format!("写入临时文件失败: {}", e))?;
+            tracing::info!("录音诊断: 播放音频文件 {:?}, 大小: {} bytes", path, data.len());
+            // 在新线程中播放，避免阻塞
+            let path_str = path.to_string_lossy().to_string();
+            std::thread::spawn(move || {
+                if let Err(e) = crate::beep_player::play_wav_file(&path_str) {
+                    tracing::error!("播放录音失败: {}", e);
+                }
+            });
+            // 短暂等待确保播放线程启动
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            Ok("正在播放...".to_string())
+        }
+        None => Err("没有可播放的录音数据".to_string()),
+    }
+}
+
 /// 录音诊断测试 — 录制 3 秒音频并保存到桌面，返回诊断信息
 #[tauri::command]
 async fn debug_audio_recording(
@@ -5703,6 +5759,7 @@ pub fn run() {
                 cancel_generation: Arc::new(AtomicU64::new(u64::MAX)),
                 preset_generation: Arc::new(AtomicU64::new(0)),
                 enable_result_selection: Arc::new(AtomicBool::new(false)),
+                recorded_audio: Arc::new(Mutex::new(None)),
             };
 
             // 预初始化音频播放器，消除首次按键提示音延迟
@@ -5986,6 +6043,7 @@ pub fn run() {
             test_llm_provider,
             test_custom_asr,
             debug_audio_recording,
+            play_recorded_audio,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

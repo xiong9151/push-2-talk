@@ -87,6 +87,7 @@ type ConfigFieldPatchPayload = {
   enableMuteOtherApps?: boolean;
   closeAction?: "close" | "minimize" | null;
   enableLiveTranscript?: boolean;
+  enableAudioDebug?: boolean;
 };
 
 type ResolvedSaveConfig = {

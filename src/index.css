@@ -325,6 +325,35 @@ select,
   border-color: rgba(20, 20, 19, 0.05);
 }
 
+/* 录音播放按钮（录音调试） */
+.play-audio-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: 8px;
+  padding: 2px 8px;
+  border: 1px solid rgba(20, 20, 19, 0.12);
+  border-radius: 10px;
+  background: rgba(20, 20, 19, 0.04);
+  color: var(--crail);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.2px;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  vertical-align: middle;
+}
+
+.play-audio-btn:hover {
+  background: rgba(217, 119, 87, 0.12);
+  border-color: rgba(217, 119, 87, 0.3);
+  transform: scale(1.05);
+}
+
+.play-audio-btn:active {
+  transform: scale(0.96);
+}
+
 /* 取消按钮 */
 .locked-btn-cancel {
   color: var(--crail);
@@ -493,6 +522,9 @@ select,
   margin-bottom: 2px;
   text-transform: uppercase;
   letter-spacing: 0.2px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
 }
 
 .result-item-text {
@@ -569,6 +601,18 @@ select,
   color: #ACBD95;
   background: rgba(156, 173, 133, 0.15);
   border-color: rgba(156, 173, 133, 0.3);
+}
+
+/* 暗色主题播放按钮 */
+.theme-dark .play-audio-btn {
+  border-color: rgba(250, 249, 245, 0.15);
+  background: rgba(250, 249, 245, 0.05);
+  color: #E68A6E;
+}
+
+.theme-dark .play-audio-btn:hover {
+  background: rgba(230, 138, 110, 0.15);
+  border-color: rgba(230, 138, 110, 0.3);
 }
 
 /* 暗色主题迷你声波条 */

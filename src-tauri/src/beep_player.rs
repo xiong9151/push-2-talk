@@ -52,3 +52,27 @@ pub fn play_start_beep() {
 pub fn play_stop_beep() {
     play_wav(STOP_BEEP, 0.3);
 }
+
+/// 播放 WAV 文件（用于录音诊断）
+///
+/// 注意：由于 rodio 的 OutputStream 必须保持存活才能播放，这个函数是同步的。
+pub fn play_wav_file(path: &str) -> Result<(), String> {
+    use std::fs::File;
+    use std::io::BufReader;
+
+    let file = File::open(path).map_err(|e| format!("无法打开音频文件: {}", e))?;
+    let source = rodio::Decoder::new(BufReader::new(file))
+        .map_err(|e| format!("无法解码音频: {}", e))?;
+
+    let (_stream, stream_handle) = rodio::OutputStream::try_default()
+        .map_err(|e| format!("无法初始化音频输出: {}", e))?;
+
+    stream_handle
+        .play_raw(source.convert_samples())
+        .map_err(|e| format!("无法播放音频: {}", e))?;
+
+    // 等待播放完成
+    std::thread::sleep(std::time::Duration::from_secs(10));
+
+    Ok(())
+}

@@ -142,6 +142,7 @@ function App() {
   const [enableAutostart, setEnableAutostart] = useState(false);
   const [enableMuteOtherApps, setEnableMuteOtherApps] = useState(false);
   const [enableLiveTranscript, setEnableLiveTranscript] = useState(false);
+  const [enableAudioDebug, setEnableAudioDebug] = useState(false);
   const [theme, setTheme] = useState("light");
   const [closeAction, setCloseAction] = useState<"close" | "minimize" | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -318,6 +319,7 @@ function App() {
     setAssistantConfig,
     setLearningConfig,
     setEnableMuteOtherApps,
+    setEnableAudioDebug,
     setTheme,
     setCloseAction,
     setDictionary,
@@ -451,6 +453,7 @@ function App() {
     enableMuteOtherApps?: boolean;
     closeAction?: "close" | "minimize" | null;
     enableLiveTranscript?: boolean;
+    enableAudioDebug?: boolean;
   }) => {
     cancelAutoSaveDebounce();
     const syncToken = configSyncWindowControllerRef.current.begin("external_config_updated");
@@ -466,6 +469,7 @@ function App() {
     const previousLearningConfig = learningConfig;
     const previousCloseAction = closeAction;
     const previousEnableLiveTranscript = enableLiveTranscript;
+    const previousEnableAudioDebug = enableAudioDebug;
 
     if (typeof patch.theme === "string") {
       setTheme(patch.theme);
@@ -482,6 +486,9 @@ function App() {
     }
     if (typeof patch.enableLiveTranscript === "boolean") {
       setEnableLiveTranscript(patch.enableLiveTranscript);
+    }
+    if (typeof patch.enableAudioDebug === "boolean") {
+      setEnableAudioDebug(patch.enableAudioDebug);
     }
 
     setSyncStatus("syncing");
@@ -508,6 +515,9 @@ function App() {
       if (typeof patch.enableLiveTranscript === "boolean") {
         setEnableLiveTranscript(previousEnableLiveTranscript);
       }
+      if (typeof patch.enableAudioDebug === "boolean") {
+        setEnableAudioDebug(previousEnableAudioDebug);
+      }
 
       setSyncStatus("error");
       syncTimeoutRef.current = window.setTimeout(() => {
@@ -523,12 +533,14 @@ function App() {
     learningConfig,
     closeAction,
     enableLiveTranscript,
+    enableAudioDebug,
     patchConfigFields,
     setTheme,
     setEnableMuteOtherApps,
     setLearningConfig,
     setCloseAction,
     setEnableLiveTranscript,
+    setEnableAudioDebug,
     cancelAutoSaveDebounce,
     releaseConfigSyncWindow,
     updateSyncWindowSnapshot,
@@ -915,6 +927,10 @@ function App() {
             enableLiveTranscript={enableLiveTranscript}
             onSetEnableLiveTranscript={async (next) => {
               await saveFieldPatchWithStatus({ enableLiveTranscript: next });
+            }}
+            enableAudioDebug={enableAudioDebug}
+            onSetEnableAudioDebug={async (next) => {
+              await saveFieldPatchWithStatus({ enableAudioDebug: next });
             }}
             updateStatus={updateStatus}
             updateInfo={updateInfo}

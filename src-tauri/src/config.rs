@@ -703,6 +703,9 @@ pub struct AppConfig {
     /// 实时显示转录文本（在悬浮窗中显示实时 ASR 结果）
     #[serde(default)]
     pub enable_live_transcript: bool,
+    /// 启用录音调试（在悬浮窗中显示播放按钮）
+    #[serde(default)]
+    pub enable_audio_debug: bool,
 }
 
 fn default_theme() -> String {
@@ -1426,6 +1429,7 @@ impl AppConfig {
             enable_result_selection: false,
             selected_result_preset_ids: Vec::new(),
             enable_live_transcript: false,
+            enable_audio_debug: false,
         }
     }
 
@@ -1612,6 +1616,9 @@ impl AppConfig {
                     }
                     if let Some(v) = v.get("enable_live_transcript") {
                         if let Ok(val) = serde_json::from_value(v.clone()) { cfg.enable_live_transcript = val; }
+                    }
+                    if let Some(v) = v.get("enable_audio_debug") {
+                        if let Ok(val) = serde_json::from_value(v.clone()) { cfg.enable_audio_debug = val; }
                     }
 
                     cfg

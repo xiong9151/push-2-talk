@@ -1,4 +1,4 @@
-import { Download, Power, RefreshCw, SlidersHorizontal, VolumeX, GraduationCap, Settings2, HelpCircle, Mic, AlertCircle, MessageSquareQuote } from "lucide-react";
+import { Bug, Download, Power, RefreshCw, SlidersHorizontal, VolumeX, GraduationCap, Settings2, HelpCircle, Mic, AlertCircle, MessageSquareQuote } from "lucide-react";
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AppStatus, UpdateStatus, LearningConfig, SharedLlmConfig, AudioDiagnostics } from "../types";
@@ -18,6 +18,9 @@ export type PreferencesPageProps = {
 
   enableLiveTranscript: boolean;
   onSetEnableLiveTranscript: (next: boolean) => Promise<void>;
+
+  enableAudioDebug: boolean;
+  onSetEnableAudioDebug: (next: boolean) => Promise<void>;
 
   theme: string;
   setTheme: (theme: string) => Promise<void>;
@@ -43,6 +46,8 @@ export function PreferencesPage({
   onSetEnableMuteOtherApps,
   enableLiveTranscript,
   onSetEnableLiveTranscript,
+  enableAudioDebug,
+  onSetEnableAudioDebug,
   theme,
   setTheme,
   updateStatus,
@@ -330,6 +335,36 @@ export function PreferencesPage({
               {updateStatus === "available" && <RedDot size="md" />}
             </button>
           </div>
+        </div>
+
+        {/* 录音调试 */}
+        <div className="flex items-center justify-between p-4 bg-[var(--paper)] border border-[var(--stone)] rounded-2xl">
+          <div className="flex items-center gap-3">
+            <div
+              className={[
+                "p-2 rounded-xl",
+                enableAudioDebug
+                  ? "bg-[rgba(106,155,204,0.12)] text-[var(--steel)]"
+                  : "bg-white border border-[var(--stone)] text-stone-500",
+              ].join(" ")}
+            >
+              <Bug size={16} />
+            </div>
+            <div>
+              <div className="text-sm font-bold text-[var(--ink)]">录音调试</div>
+              <div className="text-[11px] text-stone-400 font-semibold">
+                在选择窗口中显示播放按钮，可试听录制的音频
+              </div>
+            </div>
+          </div>
+          <Toggle
+            checked={enableAudioDebug}
+            onCheckedChange={(next) => {
+              void onSetEnableAudioDebug(next);
+            }}
+            size="sm"
+            variant="blue"
+          />
         </div>
 
         {/* 🎤 录音诊断 */}

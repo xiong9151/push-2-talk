@@ -282,13 +282,15 @@ function PresetProgressList({
   selectedIndex,
   onSelect,
   onConfirm,
-  disabled
+  disabled,
+  enableAudioDebug
 }: {
   items: PresetProgress[];
   selectedIndex: number;
   onSelect: (index: number) => void;
   onConfirm: (index: number) => void;
   disabled: boolean;
+  enableAudioDebug?: boolean;
 }) {
   const listRef = useRef<HTMLDivElement>(null);
 
@@ -322,6 +324,18 @@ function PresetProgressList({
           <div className="result-item-label">
             {item.name || `预设 ${index + 1}`}
             {item.status === "processing" && <span className="result-item-spinner" />}
+            {enableAudioDebug && item.index === 0 && (
+              <button
+                className="play-audio-btn"
+                title="播放录制的音频"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  void invoke("play_recorded_audio");
+                }}
+              >
+                🔊
+              </button>
+            )}
           </div>
           <div className="result-item-text">
             {item.status === "done" && item.text ? item.text : ''}
@@ -357,6 +371,7 @@ export default function OverlayWindow() {
   }, [selectedIndex]);
   const [liveTranscript, setLiveTranscript] = useState("");
   const [enableLiveTranscript, setEnableLiveTranscript] = useState(false);
+  const [enableAudioDebug, setEnableAudioDebug] = useState(false);
   const [presetResults, setPresetResults] = useState<PresetProgress[]>([]);
   const hasSelectedResultRef = useRef(false); // 用户是否已选择了一个结果（用 ref 确保闭包可见）
   const hasEnteredResultsRef = useRef(false); // 是否已进入 results 模式（防止重复弹出）
@@ -476,6 +491,7 @@ export default function OverlayWindow() {
     invoke<AppConfig>("load_config").then(config => {
       setTheme(config.theme || "light");
       setEnableLiveTranscript(config.enable_live_transcript || false);
+      setEnableAudioDebug(config.enable_audio_debug || false);
     }).catch(console.error);
   }, []);
 
@@ -502,6 +518,7 @@ export default function OverlayWindow() {
         console.log("[OverlayWindow] 收到 config_updated_light 事件, theme=", payload.theme);
         if (typeof payload.theme === "string") setTheme(payload.theme);
         if (typeof payload.enable_live_transcript === "boolean") setEnableLiveTranscript(payload.enable_live_transcript);
+        if (typeof payload.enable_audio_debug === "boolean") setEnableAudioDebug(payload.enable_audio_debug);
       }))) return;
 
       if (!(await registerListener("recording_started", () => {
@@ -702,12 +719,22 @@ export default function OverlayWindow() {
       {/* 但如果所有预设都已终止且全部失败，退回到普通结果视图或录音状态 */}
       {presetResults.length > 0 && !allPresetsTerminalAndFailed ? (
         <div className={`overlay-pill overlay-pill-results`}>
+          {enableAudioDebug && (
+            <button
+              onClick={() => void invoke("play_recorded_audio")}
+              className="play-audio-btn"
+              title="播放录制的音频"
+            >
+              🔊 播放录音
+            </button>
+          )}
           <PresetProgressList
             items={presetResults}
             selectedIndex={selectedIndex}
             onSelect={setSelectedIndex}
             onConfirm={handleSelectPresetResult}
             disabled={isSubmitting}
+            enableAudioDebug={enableAudioDebug}
           />
         </div>
       ) : allPresetsTerminalAndFailed && resultItems.length > 0 ? (
