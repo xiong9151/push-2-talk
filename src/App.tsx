@@ -142,13 +142,12 @@ function App() {
   const [enableAutostart, setEnableAutostart] = useState(false);
   const [enableMuteOtherApps, setEnableMuteOtherApps] = useState(false);
   const [enableLiveTranscript, setEnableLiveTranscript] = useState(false);
-  const [enableResultSelection, setEnableResultSelection] = useState(false);
   const [enableAudioDebug, setEnableAudioDebug] = useState(false);
   const [theme, setTheme] = useState("light");
   const [closeAction, setCloseAction] = useState<"close" | "minimize" | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [customAsrProviders, setCustomAsrProviders] = useState<CustomAsrProvider[]>([]);
-  const [, setResultSelectionEnabled] = useState(false);
+  const [enableResultSelection, setResultSelectionEnabled] = useState(false);
   const {
     updateStatus,
     updateInfo,
@@ -455,6 +454,7 @@ function App() {
     closeAction?: "close" | "minimize" | null;
     enableLiveTranscript?: boolean;
     enableAudioDebug?: boolean;
+    enableResultSelection?: boolean;
   }) => {
     cancelAutoSaveDebounce();
     const syncToken = configSyncWindowControllerRef.current.begin("external_config_updated");
