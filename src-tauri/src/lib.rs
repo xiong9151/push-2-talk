@@ -4056,6 +4056,10 @@ async fn handle_transcription_result(
 
     // 从内存缓存读取 enable_result_selection（避免每次从磁盘读取 CONFIG_LOCK 造成的竞态）
     let enable_result_selection = state.enable_result_selection.load(Ordering::Acquire);
+    // 从配置加载 enable_live_transcript（结果选择窗口的前置开关）
+    let enable_live_transcript = config.enable_live_transcript;
+    // 实时显示转录关闭时，强制关闭结果选择（不显示悬浮窗，自动上屏）
+    let effective_result_selection = enable_result_selection && enable_live_transcript;
 
     // 每次转录开始时递增代际（先于取消标志重置，确保旧任务通过代际检查取消）
     let current_gen = state.preset_generation.fetch_add(1, Ordering::SeqCst);
@@ -4086,7 +4090,8 @@ async fn handle_transcription_result(
             target_hwnd,
             tnl_enabled,
             Some(&llm_config),
-            enable_result_selection,
+            effective_result_selection,
+            enable_live_transcript,
             cancel_gen,
             gen_counter,
             current_gen,
@@ -4105,8 +4110,8 @@ async fn handle_transcription_result(
 
             // 如果是多结果模式，不隐藏悬浮窗（preset_progress 已在实时更新，或等待用户选择）
             // 如果是单结果模式，隐藏录音悬浮窗
-            // 注意：多结果模式下即使 items 只有 1 个（只有原文），也不隐藏，给用户选择机会
-            if !enable_result_selection {
+            // 注意：实时显示转录关闭时（enable_live_transcript=false），强制为单结果模式
+            if !effective_result_selection {
                 hide_overlay_window(&app).await;
             }
 
@@ -4143,9 +4148,9 @@ async fn handle_transcription_result(
             let _ = app.emit("transcription_results", &items);
 
             // 如果只有原文（无 LLM 结果），直接插入原文
-            // 注意：多结果模式下（enable_result_selection=true），即使 items 只有 1 个
+            // 注意：多结果模式下（effective_result_selection=true），即使 items 只有 1 个
             // 也不自动插入，因为用户可能期望看到选择面板
-            if items.len() == 1 && !enable_result_selection {
+            if items.len() == 1 && !effective_result_selection {
                 // 先恢复焦点到目标窗口，确保文本插入到正确位置
                 if let Some(hwnd) = target_hwnd {
                     if crate::win32_input::is_window_valid(hwnd) {
@@ -4171,7 +4176,7 @@ async fn handle_transcription_result(
                 // 在预设进度模式下，悬浮窗已通过 preset_progress 事件显示
                 // 无需再次调用 overlay.show()，否则会导致闪烁
                 // 仅在非预设进度模式（传统多结果）下需要显示
-                if !enable_result_selection {
+                if !effective_result_selection {
                     if let Some(overlay) = app.get_webview_window("overlay") {
                         let _ = overlay.show();
                     }
