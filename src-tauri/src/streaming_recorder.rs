@@ -12,6 +12,7 @@ use tauri::AppHandle;
 
 use crate::audio_utils::{
     apply_agc, calculate_audio_level, emit_audio_level, is_voice_active, validate_audio,
+    NoiseReducer, AudioProcessConfig,
 };
 
 // API 要求的目标采样率
@@ -32,6 +33,8 @@ pub struct StreamingRecorder {
     full_audio_data: Arc<Mutex<Vec<f32>>>,
     // 回调端数据写入完成信号，防止 stop_streaming 与回调的 race
     data_written: Arc<AtomicBool>,
+    // RNNoise 降噪器（通过 Arc<Mutex> 供回调使用）
+    noise_reducer: Arc<Mutex<Option<NoiseReducer>>>,
 }
 
 impl StreamingRecorder {
@@ -44,6 +47,7 @@ impl StreamingRecorder {
             chunk_sender: None,
             full_audio_data: Arc::new(Mutex::new(Vec::new())),
             data_written: Arc::new(AtomicBool::new(false)),
+            noise_reducer: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -102,10 +106,24 @@ impl StreamingRecorder {
             .collect()
     }
 
+    /// RNNoise 降噪配置设置
+    pub fn set_audio_processing_config(&mut self, config: &AudioProcessConfig) {
+        let mut reducer = self.noise_reducer.lock().unwrap_or_else(|e| e.into_inner());
+        if config.noise_reduction_strength > 0 {
+            *reducer = Some(NoiseReducer::new(config.noise_reduction_strength as f32 / 100.0));
+        } else {
+            *reducer = None;
+        }
+        tracing::info!("降噪配置已更新: strength={}", config.noise_reduction_strength);
+    }
+
     /// 启动流式录音，返回音频块接收通道
     /// app_handle 用于发送音频级别事件到前端
     pub fn start_streaming(&mut self, app_handle: Option<AppHandle>) -> Result<Receiver<Vec<i16>>> {
         use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+
+        // 添加降噪器引用用于回调闭包（在 self.noise_reducer 上 clone）
+        let noise_reducer_clone = Arc::clone(&self.noise_reducer);
 
         tracing::info!("开始流式录音...");
 
@@ -164,6 +182,9 @@ impl StreamingRecorder {
         // AGC 增益状态，用于平滑过渡
         let agc_gain: Arc<Mutex<f32>> = Arc::new(Mutex::new(1.0));
         let agc_gain_clone = Arc::clone(&agc_gain);
+
+        // 降噪器引用（供 F32 回调使用）
+        let noise_reducer_clone_f32 = Arc::clone(&noise_reducer_clone);
 
         // 克隆 app_handle 用于闭包
         let app_handle_f32 = app_handle.clone();
@@ -233,6 +254,12 @@ impl StreamingRecorder {
                         let mut gain = agc_gain_clone.lock().unwrap_or_else(|e| e.into_inner());
                         apply_agc(&mut chunk, &mut gain);
                         drop(gain);
+
+                        // RNNoise 降噪处理
+                        if let Some(ref mut reducer) = *noise_reducer_clone_f32.lock().unwrap_or_else(|e| e.into_inner()) {
+                            let denoised = reducer.process(&chunk);
+                            chunk.copy_from_slice(&denoised);
+                        }
 
                         let chunk_i16 = Self::f32_to_i16(&chunk);
 

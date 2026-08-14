@@ -2,6 +2,7 @@
 // 提供音频级别计算、事件发送等共享功能
 
 use anyhow::Result;
+use nnnoiseless::DenoiseState;
 use tauri::{AppHandle, Emitter};
 
 /// 音频级别事件 payload
@@ -212,4 +213,96 @@ pub fn validate_audio(audio_data: &[u8]) -> Result<()> {
         rms
     );
     Ok(())
+}
+
+/// RNNoise 降噪器
+/// 使用 nnnoiseless (纯 Rust RNNoise 移植) 进行音频降噪
+/// 处理 48kHz 音频，帧大小 480 样本 (10ms)
+pub struct NoiseReducer {
+    state: DenoiseState,
+    /// 降噪强度: 0.0 = 关闭, 1.0 = 最大降噪
+    strength: f32,
+}
+
+impl NoiseReducer {
+    pub fn new(strength: f32) -> Self {
+        Self {
+            state: DenoiseState::new(),
+            strength: strength.clamp(0.0, 1.0),
+        }
+    }
+
+    pub fn set_strength(&mut self, strength: f32) {
+        self.strength = strength.clamp(0.0, 1.0);
+    }
+
+    /// 对音频块进行降噪处理
+    /// input: 16kHz f32 音频块
+    /// output: 降噪后的 16kHz f32 音频块
+    pub fn process(&mut self, input: &[f32]) -> Vec<f32> {
+        if self.strength <= 0.0 || input.is_empty() {
+            return input.to_vec();
+        }
+
+        // RNNoise 需要 48kHz 采样率，帧大小 480 样本
+        // 输入 16kHz，重采样到 48kHz (1:3 线性插值)
+        let mut input_48k = Vec::with_capacity(input.len() * 3);
+        for &sample in input {
+            input_48k.push(sample);
+            input_48k.push(sample);
+            input_48k.push(sample);
+        }
+
+        let mut output_48k = vec![0.0f32; input_48k.len()];
+        let frame_count = input_48k.len() / 480;
+        for i in 0..frame_count {
+            let start = i * 480;
+            let mut frame = [0.0f32; 480];
+            let end = (start + 480).min(input_48k.len());
+            let actual_len = end - start;
+            if actual_len < 480 {
+                frame[..actual_len].copy_from_slice(&input_48k[start..end]);
+            } else {
+                frame.copy_from_slice(&input_48k[start..end]);
+            }
+
+            let mut denoised = [0.0f32; 480];
+            self.state.process_frame(&mut denoised, &frame);
+
+            if self.strength < 1.0 {
+                for j in 0..actual_len {
+                    denoised[j] = denoised[j] * self.strength + frame[j] * (1.0 - self.strength);
+                }
+            }
+
+            let actual_end = (start + 480).min(output_48k.len());
+            let copy_len = actual_end - start;
+            output_48k[start..start + copy_len].copy_from_slice(&denoised[..copy_len]);
+        }
+
+        // 降采样回 16kHz (3:1)
+        let output_len = output_48k.len() / 3;
+        let mut output = Vec::with_capacity(output_len);
+        for i in 0..output_len {
+            output.push(output_48k[i * 3]);
+        }
+        output
+    }
+}
+
+/// 音频处理配置
+pub struct AudioProcessConfig {
+    pub noise_reduction_strength: u8, // 0-100
+    pub enable_aec: bool,
+    pub enable_loopback: bool,
+}
+
+impl Default for AudioProcessConfig {
+    fn default() -> Self {
+        Self {
+            noise_reduction_strength: 0,
+            enable_aec: false,
+            enable_loopback: false,
+        }
+    }
 }

@@ -706,6 +706,15 @@ pub struct AppConfig {
     /// 启用录音调试（在悬浮窗中显示播放按钮）
     #[serde(default)]
     pub enable_audio_debug: bool,
+    /// 降噪强度: 0=关闭, 1-100=强度百分比
+    #[serde(default)]
+    pub noise_reduction_strength: u8,
+    /// 启用回声消除 (SpeexDSP AEC)
+    #[serde(default)]
+    pub enable_aec: bool,
+    /// 启用环回测试（录音时实时回放处理后的音频）
+    #[serde(default)]
+    pub enable_loopback: bool,
 }
 
 fn default_theme() -> String {
@@ -1430,6 +1439,9 @@ impl AppConfig {
             selected_result_preset_ids: Vec::new(),
             enable_live_transcript: false,
             enable_audio_debug: false,
+            noise_reduction_strength: 0,
+            enable_aec: false,
+            enable_loopback: false,
         }
     }
 
