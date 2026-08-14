@@ -143,6 +143,9 @@ function App() {
   const [enableMuteOtherApps, setEnableMuteOtherApps] = useState(false);
   const [enableLiveTranscript, setEnableLiveTranscript] = useState(false);
   const [enableAudioDebug, setEnableAudioDebug] = useState(false);
+  const [noiseReductionStrength, setNoiseReductionStrength] = useState(0);
+  const [enableAec, setEnableAec] = useState(false);
+  const [enableLoopback, setEnableLoopback] = useState(false);
   const [theme, setTheme] = useState("light");
   const [closeAction, setCloseAction] = useState<"close" | "minimize" | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -401,6 +404,9 @@ function App() {
     enableMuteOtherApps,
     setEnableMuteOtherApps,
     setEnableLiveTranscript,
+    setNoiseReductionStrength,
+    setEnableAec,
+    setEnableLoopback,
     theme,
     setTheme,
     closeAction,
@@ -454,6 +460,9 @@ function App() {
     closeAction?: "close" | "minimize" | null;
     enableLiveTranscript?: boolean;
     enableAudioDebug?: boolean;
+    noiseReductionStrength?: number;
+    enableAec?: boolean;
+    enableLoopback?: boolean;
     enableResultSelection?: boolean;
   }) => {
     cancelAutoSaveDebounce();
@@ -471,6 +480,9 @@ function App() {
     const previousCloseAction = closeAction;
     const previousEnableLiveTranscript = enableLiveTranscript;
     const previousEnableAudioDebug = enableAudioDebug;
+    const previousNoiseReductionStrength = noiseReductionStrength;
+    const previousEnableAec = enableAec;
+    const previousEnableLoopback = enableLoopback;
 
     if (typeof patch.theme === "string") {
       setTheme(patch.theme);
@@ -490,6 +502,15 @@ function App() {
     }
     if (typeof patch.enableAudioDebug === "boolean") {
       setEnableAudioDebug(patch.enableAudioDebug);
+    }
+    if (typeof patch.noiseReductionStrength === "number") {
+      setNoiseReductionStrength(patch.noiseReductionStrength);
+    }
+    if (typeof patch.enableAec === "boolean") {
+      setEnableAec(patch.enableAec);
+    }
+    if (typeof patch.enableLoopback === "boolean") {
+      setEnableLoopback(patch.enableLoopback);
     }
 
     setSyncStatus("syncing");
@@ -519,6 +540,15 @@ function App() {
       if (typeof patch.enableAudioDebug === "boolean") {
         setEnableAudioDebug(previousEnableAudioDebug);
       }
+      if (typeof patch.noiseReductionStrength === "number") {
+        setNoiseReductionStrength(previousNoiseReductionStrength);
+      }
+      if (typeof patch.enableAec === "boolean") {
+        setEnableAec(previousEnableAec);
+      }
+      if (typeof patch.enableLoopback === "boolean") {
+        setEnableLoopback(previousEnableLoopback);
+      }
 
       setSyncStatus("error");
       syncTimeoutRef.current = window.setTimeout(() => {
@@ -535,6 +565,9 @@ function App() {
     closeAction,
     enableLiveTranscript,
     enableAudioDebug,
+    noiseReductionStrength,
+    enableAec,
+    enableLoopback,
     patchConfigFields,
     setTheme,
     setEnableMuteOtherApps,
@@ -542,6 +575,9 @@ function App() {
     setCloseAction,
     setEnableLiveTranscript,
     setEnableAudioDebug,
+    setNoiseReductionStrength,
+    setEnableAec,
+    setEnableLoopback,
     cancelAutoSaveDebounce,
     releaseConfigSyncWindow,
     updateSyncWindowSnapshot,
@@ -932,6 +968,18 @@ function App() {
             enableAudioDebug={enableAudioDebug}
             onSetEnableAudioDebug={async (next) => {
               await saveFieldPatchWithStatus({ enableAudioDebug: next });
+            }}
+            noiseReductionStrength={noiseReductionStrength}
+            onSetNoiseReductionStrength={async (next) => {
+              await saveFieldPatchWithStatus({ noiseReductionStrength: next });
+            }}
+            enableAec={enableAec}
+            onSetEnableAec={async (next) => {
+              await saveFieldPatchWithStatus({ enableAec: next });
+            }}
+            enableLoopback={enableLoopback}
+            onSetEnableLoopback={async (next) => {
+              await saveFieldPatchWithStatus({ enableLoopback: next });
             }}
             updateStatus={updateStatus}
             updateInfo={updateInfo}

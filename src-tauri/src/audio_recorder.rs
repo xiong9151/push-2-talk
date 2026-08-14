@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tauri::AppHandle;
 
-use crate::audio_utils::{apply_agc, calculate_audio_level, emit_audio_level, validate_audio};
+use crate::audio_utils::{apply_agc, calculate_audio_level, emit_audio_level, validate_audio, NoiseReducer, AudioProcessConfig};
 
 // API 要求的目标采样率
 const TARGET_SAMPLE_RATE: u32 = 16000;
@@ -51,6 +51,10 @@ pub struct AudioRecorder {
     audio_data: Arc<Mutex<Vec<f32>>>,
     is_recording: Arc<Mutex<bool>>,
     stream: SendStream, // 保存 stream 引用（Send 包装，安全跨线程 Drop）
+    // 处理后音频（降噪后，用于试听）
+    processed_audio: Arc<Mutex<Vec<f32>>>,
+    // RNNoise 降噪器
+    noise_reducer: Arc<Mutex<Option<NoiseReducer>>>,
 }
 
 impl AudioRecorder {
@@ -61,6 +65,8 @@ impl AudioRecorder {
             audio_data: Arc::new(Mutex::new(Vec::new())),
             is_recording: Arc::new(Mutex::new(false)),
             stream: SendStream::none(),
+            processed_audio: Arc::new(Mutex::new(Vec::new())),
+            noise_reducer: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -252,6 +258,17 @@ impl AudioRecorder {
         Ok(())
     }
 
+    /// 降噪配置设置
+    pub fn set_audio_processing_config(&mut self, config: &AudioProcessConfig) {
+        let mut reducer = self.noise_reducer.lock().unwrap_or_else(|e| e.into_inner());
+        if config.noise_reduction_strength > 0 {
+            *reducer = Some(NoiseReducer::new(config.noise_reduction_strength as f32 / 100.0));
+        } else {
+            *reducer = None;
+        }
+        tracing::info!("录音器降噪配置已更新: strength={}", config.noise_reduction_strength);
+    }
+
     /// 停止录音并返回处理后的音频数据（16kHz 单声道 WAV 格式的字节数组）
     pub fn stop_recording_to_memory(&mut self) -> Result<Vec<u8>> {
         tracing::info!("停止录音...");
@@ -289,7 +306,31 @@ impl AudioRecorder {
             apply_agc(chunk, &mut current_gain);
         }
 
-        // 4. 写入内存中的 WAV 格式
+        // 3.5 RNNoise 降噪处理（降噪后的音频用于 ASR 和试听诊断）
+        let mut processed_audio_storage = self.processed_audio.lock().unwrap_or_else(|e| e.into_inner());
+        processed_audio_storage.clear();
+        {
+            let mut reducer_guard = self.noise_reducer.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(ref mut reducer) = *reducer_guard {
+                let mut denoised_all = Vec::with_capacity(resampled_audio.len());
+                for chunk in resampled_audio.chunks(3200) {
+                    let denoised = reducer.process(chunk);
+                    denoised_all.extend_from_slice(&denoised);
+                }
+                // 降噪后的音频作为试听数据，并作为传给 ASR 的数据
+                processed_audio_storage.extend_from_slice(&denoised_all);
+                tracing::info!(
+                    "RNNoise 降噪: {} -> {} 样本",
+                    resampled_audio.len(),
+                    denoised_all.len()
+                );
+            } else {
+                // 未启用降噪：直接保存当前音频用于试听
+                processed_audio_storage.extend_from_slice(&resampled_audio);
+            }
+        }
+
+        // 4. 写入内存中的 WAV 格式（使用降噪后的音频，传入 ASR）
         let spec = WavSpec {
             channels: 1,
             sample_rate: TARGET_SAMPLE_RATE,
@@ -300,7 +341,7 @@ impl AudioRecorder {
         let mut cursor = Cursor::new(Vec::new());
         {
             let mut writer = WavWriter::new(&mut cursor, spec)?;
-            for &sample in resampled_audio.iter() {
+            for &sample in processed_audio_storage.iter() {
                 let amplitude =
                     (sample * i16::MAX as f32).clamp(i16::MIN as f32, i16::MAX as f32) as i16;
                 writer.write_sample(amplitude)?;
@@ -354,6 +395,23 @@ impl AudioRecorder {
         for chunk in resampled_audio.chunks_mut(3200) {
             apply_agc(chunk, &mut current_gain);
             gain_history.push(current_gain);
+        }
+
+        // RNNoise 降噪（填充 processed_audio 供试听）
+        {
+            let mut storage = self.processed_audio.lock().unwrap_or_else(|e| e.into_inner());
+            storage.clear();
+            let mut reducer_guard = self.noise_reducer.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(ref mut reducer) = *reducer_guard {
+                let mut denoised_all = Vec::with_capacity(resampled_audio.len());
+                for chunk in resampled_audio.chunks(3200) {
+                    let denoised = reducer.process(chunk);
+                    denoised_all.extend_from_slice(&denoised);
+                }
+                storage.extend_from_slice(&denoised_all);
+            } else {
+                storage.extend_from_slice(&resampled_audio);
+            }
         }
 
         // 计算处理后 RMS
@@ -464,6 +522,11 @@ impl AudioRecorder {
     /// 检查是否正在录音
     pub fn is_recording(&self) -> bool {
         *self.is_recording.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
+    /// 获取处理后（降噪）的音频数据（用于试听）
+    pub fn get_processed_audio(&self) -> Vec<f32> {
+        self.processed_audio.lock().unwrap_or_else(|e| e.into_inner()).clone()
     }
 }
 

@@ -2083,6 +2083,28 @@ async fn start_app(
         *state.audio_recorder.lock().unwrap_or_else(|e| e.into_inner()) = Some(audio_recorder);
     }
 
+    // 应用降噪配置到录音器
+    {
+        let config = load_persisted_config().unwrap_or_else(|e| {
+            tracing::warn!("加载配置失败: {}", e);
+            AppConfig::new()
+        });
+        let audio_cfg = audio_utils::AudioProcessConfig {
+            noise_reduction_strength: config.noise_reduction_strength,
+            enable_aec: config.enable_aec,
+            enable_loopback: config.enable_loopback,
+        };
+        if use_realtime_mode {
+            if let Some(ref mut rec) = *state.streaming_recorder.lock().unwrap_or_else(|e| e.into_inner()) {
+                rec.set_audio_processing_config(&audio_cfg);
+            }
+        } else {
+            if let Some(ref mut rec) = *state.audio_recorder.lock().unwrap_or_else(|e| e.into_inner()) {
+                rec.set_audio_processing_config(&audio_cfg);
+            }
+        }
+    }
+
     // 启动全局快捷键监听（双模式支持）
     tracing::info!("[DEBUG] 准备热键配置...");
     let mut dual_hotkey_cfg = dual_hotkey_config.unwrap_or_default();
@@ -4677,6 +4699,26 @@ async fn select_transcription_result(app_handle: AppHandle, text: String) -> Res
     Ok("ok".to_string())
 }
 
+/// 播放最近一次录制并经过降噪处理的音频（用于诊断试听）
+#[tauri::command]
+async fn play_processed_audio(app_handle: AppHandle) -> Result<(), String> {
+    let state = app_handle.state::<AppState>();
+    // 从 audio_recorder 获取处理后音频
+    let audio = {
+        let recorder = state.audio_recorder.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(ref rec) = *recorder {
+            rec.get_processed_audio()
+        } else {
+            Vec::new()
+        }
+    };
+    if audio.is_empty() {
+        return Err("没有可播放的音频数据".to_string());
+    }
+    crate::beep_player::play_audio_buffer(&audio)?;
+    Ok(())
+}
+
 #[tauri::command]
 async fn hide_overlay(app_handle: AppHandle) -> Result<(), String> {
     if let Some(overlay) = app_handle.get_webview_window("overlay") {
@@ -6068,6 +6110,7 @@ pub fn run() {
             test_custom_asr,
             debug_audio_recording,
             play_recorded_audio,
+            play_processed_audio,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

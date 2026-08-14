@@ -88,6 +88,9 @@ type ConfigFieldPatchPayload = {
   closeAction?: "close" | "minimize" | null;
   enableLiveTranscript?: boolean;
   enableAudioDebug?: boolean;
+  noiseReductionStrength?: number;
+  enableAec?: boolean;
+  enableLoopback?: boolean;
 };
 
 type ResolvedSaveConfig = {
@@ -164,6 +167,9 @@ export type UseAppServiceControllerParams = {
   setEnableMuteOtherApps: React.Dispatch<React.SetStateAction<boolean>>;
 
   setEnableLiveTranscript: React.Dispatch<React.SetStateAction<boolean>>;
+  setNoiseReductionStrength?: React.Dispatch<React.SetStateAction<number>>;
+  setEnableAec?: React.Dispatch<React.SetStateAction<boolean>>;
+  setEnableLoopback?: React.Dispatch<React.SetStateAction<boolean>>;
 
   theme: string;
   setTheme: React.Dispatch<React.SetStateAction<string>>;
@@ -219,6 +225,9 @@ export function useAppServiceController({
   enableMuteOtherApps,
   setEnableMuteOtherApps,
   setEnableLiveTranscript,
+  setNoiseReductionStrength,
+  setEnableAec,
+  setEnableLoopback,
   theme,
   setTheme,
   closeAction,
@@ -553,6 +562,9 @@ export function useAppServiceController({
       setEnableMuteOtherApps(config.enable_mute_other_apps ?? false);
       setTheme(config.theme || "light");
       setEnableLiveTranscript(config.enable_live_transcript ?? false);
+      setNoiseReductionStrength?.(config.noise_reduction_strength ?? 0);
+      setEnableAec?.(config.enable_aec ?? false);
+      setEnableLoopback?.(config.enable_loopback ?? false);
 
       const dictArr = Array.isArray(config.dictionary) ? config.dictionary : [];
       let loadedDict: DictionaryEntry[];

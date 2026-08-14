@@ -165,6 +165,9 @@ export interface AppConfig {
   selected_result_preset_ids: string[];
   enable_live_transcript: boolean;
   enable_audio_debug: boolean;
+  noise_reduction_strength: number;
+  enable_aec: boolean;
+  enable_loopback: boolean;
 }
 
 // 自定义 ASR 提供商配置

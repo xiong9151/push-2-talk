@@ -330,7 +330,7 @@ function PresetProgressList({
                 title="播放录制的音频"
                 onClick={(e) => {
                   e.stopPropagation();
-                  void invoke("play_recorded_audio");
+                  void invoke("play_processed_audio");
                 }}
               >
                 🔊
