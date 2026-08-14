@@ -420,6 +420,9 @@ fn emit_config_updated(app: &AppHandle, config: &AppConfig) {
         "theme": config.theme,
         "enable_live_transcript": config.enable_live_transcript,
         "enable_audio_debug": config.enable_audio_debug,
+        "noise_reduction_strength": config.noise_reduction_strength,
+        "enable_aec": config.enable_aec,
+        "enable_loopback": config.enable_loopback,
     });
     let _ = app.emit("config_updated_light", theme_payload);
 }
@@ -837,6 +840,9 @@ struct ConfigFieldPatch {
     enable_result_selection: Option<bool>,
     enable_live_transcript: Option<bool>,
     enable_audio_debug: Option<bool>,
+    noise_reduction_strength: Option<u8>,
+    enable_aec: Option<bool>,
+    enable_loopback: Option<bool>,
 }
 
 // Tauri Commands
@@ -956,6 +962,9 @@ async fn save_config(
             selected_result_preset_ids: existing.selected_result_preset_ids.clone(),
             enable_live_transcript: existing.enable_live_transcript,
             enable_audio_debug: existing.enable_audio_debug,
+            noise_reduction_strength: existing.noise_reduction_strength,
+            enable_aec: existing.enable_aec,
+            enable_loopback: existing.enable_loopback,
         };
 
         Ok(())
@@ -1102,6 +1111,16 @@ async fn patch_config_fields(app: AppHandle, patch: ConfigFieldPatch) -> Result<
 
         if let Some(enabled) = patch.enable_audio_debug {
             config.enable_audio_debug = enabled;
+        }
+
+        if let Some(strength) = patch.noise_reduction_strength {
+            config.noise_reduction_strength = strength;
+        }
+        if let Some(enabled) = patch.enable_aec {
+            config.enable_aec = enabled;
+        }
+        if let Some(enabled) = patch.enable_loopback {
+            config.enable_loopback = enabled;
         }
 
         Ok(())

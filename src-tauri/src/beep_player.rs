@@ -76,3 +76,34 @@ pub fn play_wav_file(path: &str) -> Result<(), String> {
 
     Ok(())
 }
+
+/// 播放音频缓冲区（f32 格式，16kHz）
+/// 用于播放降噪后的音频试听
+pub fn play_audio_buffer(samples: &[f32]) -> Result<(), String> {
+    let spec = hound::WavSpec {
+        channels: 1,
+        sample_rate: 16000,
+        bits_per_sample: 16,
+        sample_format: hound::SampleFormat::Int,
+    };
+    let mut wav_data = Vec::new();
+    {
+        let mut writer =
+            hound::WavWriter::new(Cursor::new(&mut wav_data), spec).map_err(|e| e.to_string())?;
+        for &sample in samples {
+            let amplitude = (sample * 32768.0).clamp(-32768.0, 32767.0) as i16;
+            writer.write_sample(amplitude).map_err(|e| e.to_string())?;
+        }
+        writer.finalize().map_err(|e| e.to_string())?;
+    }
+    let cursor = Cursor::new(wav_data);
+    let (_stream, stream_handle) = rodio::OutputStream::try_default()
+        .map_err(|e| e.to_string())?;
+    let source = rodio::Decoder::new(cursor).map_err(|e| e.to_string())?;
+    stream_handle
+        .play_raw(source.convert_samples())
+        .map_err(|e| e.to_string())?;
+    // 等待播放完成
+    std::thread::sleep(std::time::Duration::from_secs(5));
+    Ok(())
+}
