@@ -55,6 +55,15 @@ pub struct AudioRecorder {
     processed_audio: Arc<Mutex<Vec<f32>>>,
     // RNNoise 降噪器
     noise_reducer: Arc<Mutex<Option<NoiseReducer>>>,
+    // SpeexDSP AEC 处理器（仅在 enable_aec && enable_loopback 时初始化）
+    #[cfg(feature = "aec")]
+    aec_state: Arc<Mutex<Option<crate::aec::processor::AecProcessor>>>,
+    // 远端（扬声器环回）音频缓冲（loopback 回调写入，stop 时离线 AEC 消费）
+    #[cfg(feature = "aec")]
+    far_end_buffer: Arc<Mutex<Vec<f32>>>,
+    // loopback 捕获流（保持存活）
+    #[cfg(feature = "aec")]
+    loopback_stream: SendStream,
 }
 
 impl AudioRecorder {
@@ -67,6 +76,12 @@ impl AudioRecorder {
             stream: SendStream::none(),
             processed_audio: Arc::new(Mutex::new(Vec::new())),
             noise_reducer: Arc::new(Mutex::new(None)),
+            #[cfg(feature = "aec")]
+            aec_state: Arc::new(Mutex::new(None)),
+            #[cfg(feature = "aec")]
+            far_end_buffer: Arc::new(Mutex::new(Vec::new())),
+            #[cfg(feature = "aec")]
+            loopback_stream: SendStream::none(),
         })
     }
 
@@ -255,6 +270,26 @@ impl AudioRecorder {
         // 保存 stream 引用，保持录音流活跃
         self.stream.set(stream);
 
+        // 启动 loopback 环回采集（AEC 远端参考信号）
+        #[cfg(feature = "aec")]
+        {
+            self.far_end_buffer.lock().unwrap_or_else(|e| e.into_inner()).clear();
+            if self.aec_state.lock().unwrap_or_else(|e| e.into_inner()).is_some() {
+                let far_buf = Arc::clone(&self.far_end_buffer);
+                match crate::aec::start_loopback_capture(move |chunk| {
+                    far_buf.lock().unwrap_or_else(|e| e.into_inner()).extend_from_slice(&chunk);
+                }) {
+                    Ok(lb_stream) => {
+                        self.loopback_stream.set(lb_stream);
+                        tracing::info!("录音器 AEC loopback 环回采集已启动");
+                    }
+                    Err(e) => {
+                        tracing::warn!("启动 loopback 环回采集失败，AEC 将以静音参考运行: {}", e);
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 
@@ -267,6 +302,27 @@ impl AudioRecorder {
             *reducer = None;
         }
         tracing::info!("录音器降噪配置已更新: strength={}", config.noise_reduction_strength);
+
+        #[cfg(feature = "aec")]
+        {
+            use crate::aec::processor::AecProcessor;
+            let mut aec = self.aec_state.lock().unwrap_or_else(|e| e.into_inner());
+            if config.enable_aec && config.enable_loopback {
+                *aec = Some(AecProcessor::new());
+                tracing::info!(
+                    "录音器 AEC 已启用: frame_size={}, filter_length={}",
+                    crate::aec::AEC_FRAME_SIZE,
+                    crate::aec::AEC_FILTER_LENGTH
+                );
+            } else {
+                if aec.is_some() {
+                aec.take();
+                }
+                if config.enable_aec && !config.enable_loopback {
+                    tracing::warn!("AEC 已开启但环回采集未开启 — AEC 无参考信号，将作为 no-op");
+                }
+            }
+        }
     }
 
     /// 停止录音并返回处理后的音频数据（16kHz 单声道 WAV 格式的字节数组）
@@ -299,6 +355,47 @@ impl AudioRecorder {
             mono_audio.len(),
             resampled_audio.len()
         );
+
+        // 2.5 离线 AEC 回声消除（在 AGC/RNNoise 之前）
+        #[cfg(feature = "aec")]
+        {
+            // 先停止 loopback 采集流
+            self.loopback_stream.clear();
+            let mut aec_guard = self.aec_state.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(ref mut aec) = *aec_guard {
+                let far = self.far_end_buffer.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                let frame_size = crate::aec::AEC_FRAME_SIZE;
+                // 对齐到 frame 边界（取两者较短长度）
+                let usable = resampled_audio
+                    .len()
+                    .min(far.len())
+                    / frame_size * frame_size;
+                if usable >= frame_size {
+                    tracing::info!(
+                        "离线 AEC: near={} far={} 可用帧={}",
+                        resampled_audio.len(),
+                        far.len(),
+                        usable / frame_size
+                    );
+                    for start in (0..usable).step_by(frame_size) {
+                        let end = start + frame_size;
+                        let far_frame: Vec<f32> = far[start..end].to_vec();
+                        aec.process_frame(&mut resampled_audio[start..end], &far_frame);
+                    }
+                    // 处理尾部不足一帧的部分：零填充远端
+                    if resampled_audio.len() > usable {
+                        let tail = resampled_audio.len() - usable;
+                        let mut near_tail = resampled_audio[usable..].to_vec();
+                        near_tail.resize(frame_size, 0.0);
+                        let far_tail = vec![0.0f32; frame_size];
+                        aec.process_frame(&mut near_tail, &far_tail);
+                        resampled_audio[usable..].copy_from_slice(&near_tail[..tail]);
+                    }
+                } else {
+                    tracing::warn!("离线 AEC 跳过：远端缓冲不足 ({} < {})", far.len(), frame_size);
+                }
+            }
+        }
 
         // 3. AGC 处理（按块处理以保持平滑）
         let mut current_gain = 1.0;
@@ -388,6 +485,25 @@ impl AudioRecorder {
         // 降采样
         let mut resampled_audio =
             self.resample(&mono_audio, self.device_sample_rate, TARGET_SAMPLE_RATE);
+
+        // 离线 AEC 回声消除（在 AGC/RNNoise 之前）
+        #[cfg(feature = "aec")]
+        {
+            self.loopback_stream.clear();
+            let mut aec_guard = self.aec_state.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(ref mut aec) = *aec_guard {
+                let far = self.far_end_buffer.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                let frame_size = crate::aec::AEC_FRAME_SIZE;
+                let usable = resampled_audio.len().min(far.len()) / frame_size * frame_size;
+                if usable >= frame_size {
+                    for start in (0..usable).step_by(frame_size) {
+                        let end = start + frame_size;
+                        let far_frame: Vec<f32> = far[start..end].to_vec();
+                        aec.process_frame(&mut resampled_audio[start..end], &far_frame);
+                    }
+                }
+            }
+        }
 
         // AGC 处理
         let mut current_gain = 1.0;
@@ -480,6 +596,25 @@ impl AudioRecorder {
         // 2. 降采样到 16kHz
         let mut resampled_audio =
             self.resample(&mono_audio, self.device_sample_rate, TARGET_SAMPLE_RATE);
+
+        // 离线 AEC（保留兼容性，此路径未使用但保持一致）
+        #[cfg(feature = "aec")]
+        {
+            self.loopback_stream.clear();
+            let mut aec_guard = self.aec_state.lock().unwrap_or_else(|e| e.into_inner());
+            if let Some(ref mut aec) = *aec_guard {
+                let far = self.far_end_buffer.lock().unwrap_or_else(|e| e.into_inner()).clone();
+                let frame_size = crate::aec::AEC_FRAME_SIZE;
+                let usable = resampled_audio.len().min(far.len()) / frame_size * frame_size;
+                if usable >= frame_size {
+                    for start in (0..usable).step_by(frame_size) {
+                        let end = start + frame_size;
+                        let far_frame: Vec<f32> = far[start..end].to_vec();
+                        aec.process_frame(&mut resampled_audio[start..end], &far_frame);
+                    }
+                }
+            }
+        }
 
         // 3. AGC 处理（按块处理以保持平滑）
         let mut current_gain = 1.0;

@@ -3,6 +3,8 @@
 
 pub mod asr;
 mod assistant_processor;
+#[cfg(feature = "aec")]
+pub mod aec;
 mod audio_mute_manager;
 mod audio_recorder;
 mod audio_utils;

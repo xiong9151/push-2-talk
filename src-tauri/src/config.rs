@@ -712,7 +712,7 @@ pub struct AppConfig {
     /// 启用回声消除 (SpeexDSP AEC)
     #[serde(default)]
     pub enable_aec: bool,
-    /// 启用环回测试（录音时实时回放处理后的音频）
+    /// 启用环回采集（捕获系统扬声器输出作为 AEC 远端参考信号）
     #[serde(default)]
     pub enable_loopback: bool,
 }

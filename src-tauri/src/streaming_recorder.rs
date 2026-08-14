@@ -35,6 +35,15 @@ pub struct StreamingRecorder {
     data_written: Arc<AtomicBool>,
     // RNNoise 降噪器（通过 Arc<Mutex> 供回调使用）
     noise_reducer: Arc<Mutex<Option<NoiseReducer>>>,
+    // SpeexDSP AEC 处理器（仅在 enable_aec && enable_loopback 时初始化）
+    #[cfg(feature = "aec")]
+    aec_state: Arc<Mutex<Option<crate::aec::processor::AecProcessor>>>,
+    // 远端（扬声器环回）音频块通道：loopback 回调 push，mic 回调 pull
+    #[cfg(feature = "aec")]
+    far_end_rx: Arc<Mutex<Option<Arc<Receiver<Vec<f32>>>>>>,
+    // loopback 捕获流（保持存活）
+    #[cfg(feature = "aec")]
+    loopback_stream: Arc<Mutex<Option<Stream>>>,
 }
 
 impl StreamingRecorder {
@@ -48,6 +57,12 @@ impl StreamingRecorder {
             full_audio_data: Arc::new(Mutex::new(Vec::new())),
             data_written: Arc::new(AtomicBool::new(false)),
             noise_reducer: Arc::new(Mutex::new(None)),
+            #[cfg(feature = "aec")]
+            aec_state: Arc::new(Mutex::new(None)),
+            #[cfg(feature = "aec")]
+            far_end_rx: Arc::new(Mutex::new(None)),
+            #[cfg(feature = "aec")]
+            loopback_stream: Arc::new(Mutex::new(None)),
         })
     }
 
@@ -115,6 +130,27 @@ impl StreamingRecorder {
             *reducer = None;
         }
         tracing::info!("降噪配置已更新: strength={}", config.noise_reduction_strength);
+
+        #[cfg(feature = "aec")]
+        {
+            use crate::aec::processor::AecProcessor;
+            let mut aec = self.aec_state.lock().unwrap_or_else(|e| e.into_inner());
+            if config.enable_aec && config.enable_loopback {
+                *aec = Some(AecProcessor::new());
+                tracing::info!(
+                    "AEC 已启用: frame_size={}, filter_length={}",
+                    crate::aec::AEC_FRAME_SIZE,
+                    crate::aec::AEC_FILTER_LENGTH
+                );
+            } else {
+                if *aec.is_some() {
+                    aec.take();
+                }
+                if config.enable_aec && !config.enable_loopback {
+                    tracing::warn!("AEC 已开启但环回采集未开启 — AEC 无参考信号，将作为 no-op");
+                }
+            }
+        }
     }
 
     /// 启动流式录音，返回音频块接收通道
@@ -186,6 +222,14 @@ impl StreamingRecorder {
         // 降噪器引用（供 F32 回调使用）
         let noise_reducer_clone_f32 = Arc::clone(&noise_reducer_clone);
 
+        // AEC 相关引用（仅 aec feature 下）
+        #[cfg(feature = "aec")]
+        let aec_state_clone = Arc::clone(&self.aec_state);
+        #[cfg(feature = "aec")]
+        let far_end_rx_clone = Arc::clone(&self.far_end_rx);
+        #[cfg(feature = "aec")]
+        let aec_frame_size = crate::aec::AEC_FRAME_SIZE;
+
         // 克隆 app_handle 用于闭包
         let app_handle_f32 = app_handle.clone();
 
@@ -205,7 +249,20 @@ impl StreamingRecorder {
 
                     // 处理数据：转单声道 + 降采样
                     let mono = Self::to_mono(data, channels);
-                    let resampled = Self::resample(&mono, device_sample_rate, TARGET_SAMPLE_RATE);
+                    let mut resampled = Self::resample(&mono, device_sample_rate, TARGET_SAMPLE_RATE);
+
+                    // === AEC 回声消除（在 VAD/AGC/RNNoise 之前）===
+                    #[cfg(feature = "aec")]
+                    {
+                        if let Some(ref rx_opt) = *far_end_rx_clone.lock().unwrap_or_else(|e| e.into_inner()) {
+                            if let Some(ref mut aec) = *aec_state_clone.lock().unwrap_or_else(|e| e.into_inner()) {
+                                // 用一个临时累加器收集远端样本（每次回调新建，
+                                // 前后帧的远端样本由通道本身保序）。
+                                let mut far_accum: Vec<f32> = Vec::with_capacity(aec_frame_size);
+                                crate::aec::run_aec_realtime(aec, &mut resampled, rx_opt, &mut far_accum, aec_frame_size);
+                            }
+                        }
+                    }
 
                     // 基于时间的音频级别发送（目标 ~30Hz，每 33ms 发送一次）
                     if let Some(ref app) = app_handle_f32 {
@@ -299,8 +356,19 @@ impl StreamingRecorder {
 
                         // 处理数据
                         let mono = Self::to_mono(&f32_data, channels);
-                        let resampled =
+                        let mut resampled =
                             Self::resample(&mono, device_sample_rate, TARGET_SAMPLE_RATE);
+
+                        // === AEC 回声消除 ===
+                        #[cfg(feature = "aec")]
+                        {
+                            if let Some(ref rx_opt) = *far_end_rx_clone.lock().unwrap_or_else(|e| e.into_inner()) {
+                                if let Some(ref mut aec) = *aec_state_clone.lock().unwrap_or_else(|e| e.into_inner()) {
+                                    let mut far_accum: Vec<f32> = Vec::with_capacity(aec_frame_size);
+                                    crate::aec::run_aec_realtime(aec, &mut resampled, rx_opt, &mut far_accum, aec_frame_size);
+                                }
+                            }
+                        }
 
                         // 基于时间的音频级别发送（目标 ~30Hz）
                         if let Some(ref app) = app_handle_i16 {
@@ -383,8 +451,19 @@ impl StreamingRecorder {
 
                         // 处理数据
                         let mono = Self::to_mono(&f32_data, channels);
-                        let resampled =
+                        let mut resampled =
                             Self::resample(&mono, device_sample_rate, TARGET_SAMPLE_RATE);
+
+                        // === AEC 回声消除 ===
+                        #[cfg(feature = "aec")]
+                        {
+                            if let Some(ref rx_opt) = *far_end_rx_clone.lock().unwrap_or_else(|e| e.into_inner()) {
+                                if let Some(ref mut aec) = *aec_state_clone.lock().unwrap_or_else(|e| e.into_inner()) {
+                                    let mut far_accum: Vec<f32> = Vec::with_capacity(aec_frame_size);
+                                    crate::aec::run_aec_realtime(aec, &mut resampled, rx_opt, &mut far_accum, aec_frame_size);
+                                }
+                            }
+                        }
 
                         // 基于时间的音频级别发送（目标 ~30Hz）
                         if let Some(ref app) = app_handle_u16 {
@@ -440,6 +519,28 @@ impl StreamingRecorder {
             _ => return Err(anyhow::anyhow!("不支持的采样格式")),
         };
 
+        // === 启动 loopback 环回采集（AEC 远端参考信号）===
+        #[cfg(feature = "aec")]
+        {
+            let aec_active = self.aec_state.lock().unwrap_or_else(|e| e.into_inner()).is_some();
+            if aec_active {
+                let (far_tx, far_rx) = bounded::<Vec<f32>>(500);
+                match crate::aec::start_loopback_capture(move |chunk| {
+                    let _ = far_tx.try_send(chunk);
+                }) {
+                    Ok(lb_stream) => {
+                        *self.loopback_stream.lock().unwrap_or_else(|e| e.into_inner()) = Some(lb_stream);
+                        *self.far_end_rx.lock().unwrap_or_else(|e| e.into_inner()) = Some(Arc::new(far_rx));
+                        tracing::info!("AEC loopback 环回采集已启动");
+                    }
+                    Err(e) => {
+                        tracing::warn!("启动 loopback 环回采集失败，AEC 将以静音参考运行（no-op）: {}", e);
+                        // far_end_rx 保持 None，回调会用静音填充，安全
+                    }
+                }
+            }
+        }
+
         stream.play()?;
         self.stream = Some(stream);
 
@@ -481,6 +582,13 @@ impl StreamingRecorder {
         // 最后 drop stream
         self.stream = None;
         self.chunk_sender = None;
+
+        // 停止 loopback 环回采集流（AEC 远端）
+        #[cfg(feature = "aec")]
+        {
+            *self.loopback_stream.lock().unwrap_or_else(|e| e.into_inner()) = None;
+            *self.far_end_rx.lock().unwrap_or_else(|e| e.into_inner()) = None;
+        }
 
         // 获取完整音频数据
         let raw_audio = self.full_audio_data.lock().unwrap_or_else(|e| e.into_inner()).clone();

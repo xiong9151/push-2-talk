@@ -67,6 +67,9 @@ jobs:
             }
           }
 
+      - name: Cargo check (fast, surfaces Rust/FFI errors early)
+        run: cargo check --manifest-path src-tauri/Cargo.toml --bin push-to-talk
+
       - name: Build only (No Release)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
