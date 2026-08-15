@@ -2,7 +2,6 @@ use rodio::{OutputStream, OutputStreamHandle, Sink, Source};
 use std::io::Cursor;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
-use std::time::Duration;
 
 // 在编译时嵌入提示音 WAV 文件
 const START_BEEP: &[u8] = include_bytes!("../resources/start_beep.wav");
@@ -49,7 +48,7 @@ pub fn loopback_play(samples: &[f32]) {
     if samples.is_empty() {
         return;
     }
-    let mut guard = LOOPBACK_SINK.lock().unwrap();
+    let guard = LOOPBACK_SINK.lock().unwrap();
     if let Some(ref sink) = *guard {
         let spec = hound::WavSpec {
             channels: 1,
@@ -58,16 +57,19 @@ pub fn loopback_play(samples: &[f32]) {
             sample_format: hound::SampleFormat::Int,
         };
         let mut wav_data = Vec::with_capacity(44 + samples.len() * 2);
-        if let Ok(mut writer) = hound::WavWriter::new(Cursor::new(&mut wav_data), spec) {
-            for &s in samples {
-                let amp = (s * 32768.0).clamp(-32768.0, 32767.0) as i16;
-                let _ = writer.write_sample(amp);
-            }
-            if writer.finalize().is_ok() {
-                if let Ok(source) = rodio::Decoder::new(Cursor::new(wav_data)) {
-                    sink.append(source);
+        // 独立作用域：确保 WavWriter 在移动 wav_data 之前被 drop（解除借用）
+        {
+            let cursor = std::io::Cursor::new(&mut wav_data);
+            if let Ok(mut writer) = hound::WavWriter::new(cursor, spec) {
+                for &s in samples {
+                    let amp = (s * 32768.0).clamp(-32768.0, 32767.0) as i16;
+                    let _ = writer.write_sample(amp);
                 }
+                let _ = writer.finalize();
             }
+        }
+        if let Ok(source) = rodio::Decoder::new(std::io::Cursor::new(wav_data)) {
+            sink.append(source);
         }
         let prev = LOOPBACK_COUNTER.fetch_add(1, Ordering::Relaxed);
         if prev % 100 == 0 {
