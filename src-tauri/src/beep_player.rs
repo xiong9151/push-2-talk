@@ -55,7 +55,7 @@ pub fn start_mic_monitor() {
         let err_fn = |err| tracing::error!("环回监听流错误: {}", err);
 
         // 降噪器和 AGC 状态
-        let mut reducer = crate::audio_utils::NoiseReducer::new(0.5);
+        let mut reducer = crate::audio_utils::NoiseReducer::new(0.8);
         let mut agc_gain = 1.0f32;
 
         // 格式无关的原始数据收集（所有格式都先转成 f32 再统一处理）
@@ -159,15 +159,15 @@ pub fn start_mic_monitor() {
                                 resampled.push((mono[lo] as f64 * (1.0 - frac) + mono[hi] as f64 * frac) as f32);
                             }
                         }
-                        // AGC
-                        for c in resampled.chunks_mut(3200) {
-                            crate::audio_utils::apply_agc(c, &mut agc_gain);
-                        }
-                        // RNNoise 降噪
+                        // RNNoise 降噪优先（先去掉噪声，避免降噪把音量一起压小）
                         let mut denoised = Vec::with_capacity(resampled.len());
                         for c in resampled.chunks(3200) {
                             let d = reducer.process(c);
                             denoised.extend_from_slice(&d);
+                        }
+                        // AGC 补足音量
+                        for c in denoised.chunks_mut(3200) {
+                            crate::audio_utils::apply_agc(c, &mut agc_gain);
                         }
                         // 播放
                         loopback_play_inner(&denoised);
@@ -197,13 +197,13 @@ pub fn init_loopback_sink() {
     if let Some(handle) = STREAM_HANDLE.get() {
         match Sink::try_new(handle) {
             Ok(sink) => {
-                sink.set_volume(0.1); // 较低音量，避免啸叫
+                sink.set_volume(0.4); // 适中音量（原 0.1 太小）
                 let mut guard = LOOPBACK_SINK.lock().unwrap();
                 if let Some(ref old) = *guard {
                     old.stop();
                 }
                 *guard = Some(sink);
-                tracing::info!("环回监听 Sink 已初始化, 音量=0.1");
+                tracing::info!("环回监听 Sink 已初始化, 音量=0.4");
             }
             Err(e) => {
                 tracing::warn!("环回监听 Sink 初始化失败: {}", e);

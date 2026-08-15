@@ -107,68 +107,30 @@ jobs:
         id: changelog
         shell: bash
         run: |
-          # 获取当前 tag
-          CURRENT_TAG=${GITHUB_REF#refs/tags/}
-          echo "Current tag: $CURRENT_TAG"
-
-          # 获取上一个 tag
-          PREV_TAG=$(git describe --tags --abbrev=0 ${CURRENT_TAG}^ 2>/dev/null || echo "")
-          echo "Previous tag: $PREV_TAG"
-
-          # 获取 commit 列表
-          if [ -z "$PREV_TAG" ]; then
-            COMMITS=$(git log --pretty=format:"%s" -50)
-          else
-            COMMITS=$(git log ${PREV_TAG}..${CURRENT_TAG} --pretty=format:"%s")
-          fi
-
-          # 分类 commits
-          FEATURES=""
-          FIXES=""
-          UPDATES=""
-          OTHERS=""
-
-          while IFS= read -r line; do
-            [ -z "$line" ] && continue
-
-            if echo "$line" | grep -qiE "^feat[：:]"; then
-              FEATURES="${FEATURES}- ${line#*[：:]}"$'\n'
-            elif echo "$line" | grep -qiE "^(fix|bugfix|bug)[：:]"; then
-              FIXES="${FIXES}- ${line#*[：:]}"$'\n'
-            elif echo "$line" | grep -qiE "^(update|improve|perf|优化)[：:]"; then
-              UPDATES="${UPDATES}- ${line#*[：:]}"$'\n'
-            elif echo "$line" | grep -qiE "^(chore|docs|refactor|style|test|security)[：:]"; then
-              OTHERS="${OTHERS}- ${line#*[：:]}"$'\n'
-            else
-              OTHERS="${OTHERS}- ${line}"$'\n'
-            fi
-          done <<< "$COMMITS"
-
-          # 构建 changelog
-          CHANGELOG=""
-
-          if [ -n "$FEATURES" ]; then
-            CHANGELOG="${CHANGELOG}## ✨ 新功能"$'\n'"${FEATURES}"$'\n'
-          fi
-
-          if [ -n "$FIXES" ]; then
-            CHANGELOG="${CHANGELOG}## 🐛 Bug 修复"$'\n'"${FIXES}"$'\n'
-          fi
-
-          if [ -n "$UPDATES" ]; then
-            CHANGELOG="${CHANGELOG}## 🚀 优化改进"$'\n'"${UPDATES}"$'\n'
-          fi
-
-          if [ -n "$OTHERS" ]; then
-            CHANGELOG="${CHANGELOG}## 📦 其他"$'\n'"${OTHERS}"$'\n'
-          fi
-
-          # 如果没有任何分类的 commits
-          if [ -z "$CHANGELOG" ]; then
-            CHANGELOG="本次更新无重大变更"$'\n'
-          fi
-
-          # 输出到 GitHub Actions
+          CHANGELOG=$(printf '%s\n' \
+            '## ✨ 新功能' \
+            '- RNNoise 神经网络降噪（可调强度 0-100%）' \
+            '- 环回监听：独立麦克风实时监听模式，打开开关即可试听降噪效果' \
+            '- 录音调试：选择窗口中播放降噪后音频按钮' \
+            '- 渐进式结果面板：每个预设结果识别好就立即显示' \
+            '- 多结果选择窗口 + 并行 LLM 润色' \
+            '- 自定义 ASR 提供商支持' \
+            '- 实时转录悬浮窗' \
+            '' \
+            '## 🐛 Bug 修复' \
+            '- 快速连续按键修复（以最后一次为准）' \
+            '- 多选设置重启后不丢失' \
+            '- 配置 API Key 保存不丢失' \
+            '- 悬浮窗二次弹出修复' \
+            '- 降噪/环回监听开关实时生效' \
+            '- 编译错误修复（EXPORT 宏、头文件缺失、MutexGuard Send 等）' \
+            '' \
+            '## 🔧 优化' \
+            '- SpeexDSP AEC 回声消除（vendored C + cc, OBS 方式，无 pkg-config）' \
+            '- 自动生成 release notes 聚合' \
+            '- 环回监听音量提升至 0.4，降噪强度提升至 80%' \
+            '- 降噪处理顺序改为 RNNoise 优先 → AGC 补音量'
+          )
           echo "changelog<<EOF" >> $GITHUB_OUTPUT
           echo "$CHANGELOG" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
