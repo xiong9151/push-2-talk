@@ -1,6 +1,7 @@
 use rodio::{OutputStream, OutputStreamHandle, Sink, Source};
-use std::io::Cursor;
+use rodio::source::SamplesBuffer;
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 // 在编译时嵌入提示音 WAV 文件
@@ -17,37 +18,45 @@ static STREAM_HANDLE: std::sync::OnceLock<OutputStreamHandle> = std::sync::OnceL
 /// 环回监听（实时回放处理后的音频到扬声器）
 /// 使用独立的 Sink，在录音期间持续追加音频帧
 static LOOPBACK_SINK: Mutex<Option<Sink>> = Mutex::new(None);
+/// 环回监听播放计数器（调试用）
+static LOOPBACK_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// 初始化环回监听的 Sink
 pub fn init_loopback_sink() {
     if let Some(handle) = STREAM_HANDLE.get() {
-        if let Ok(sink) = Sink::try_new(handle) {
-            sink.set_volume(0.5);
-            let mut guard = LOOPBACK_SINK.lock().unwrap();
-            // 停止旧的 sink（如果有）
-            if let Some(ref old) = *guard {
-                old.stop();
+        match Sink::try_new(handle) {
+            Ok(sink) => {
+                sink.set_volume(0.1); // 较低音量，避免啸叫
+                let mut guard = LOOPBACK_SINK.lock().unwrap();
+                if let Some(ref old) = *guard {
+                    old.stop();
+                }
+                *guard = Some(sink);
+                tracing::info!("环回监听 Sink 已初始化, 音量=0.1");
             }
-            *guard = Some(sink);
+            Err(e) => {
+                tracing::warn!("环回监听 Sink 初始化失败: {}", e);
+            }
         }
+    } else {
+        tracing::warn!("环回监听: STREAM_HANDLE 未初始化");
     }
 }
 
 /// 将一段处理后音频追加到环回监听播放队列
-/// 直接使用 f32 源，无需经过 WAV 编码/解码
 pub fn loopback_play(samples: &[f32]) {
     if samples.is_empty() {
         return;
     }
     let mut guard = LOOPBACK_SINK.lock().unwrap();
     if let Some(ref sink) = *guard {
-        let source = F32Source {
-            data: samples.to_vec(),
-            pos: 0,
-            sample_rate: 16000,
-            channels: 1,
-        };
+        let source = SamplesBuffer::new(1, 16000, samples.to_vec());
         sink.append(source);
+        // 每 100 次打一次日志确认环回正在工作
+        let prev = LOOPBACK_COUNTER.fetch_add(1, Ordering::Relaxed);
+        if prev % 100 == 0 {
+            tracing::info!("环回监听: 已播放 {} 块, 当前块 {} 样本", prev + 1, samples.len());
+        }
     }
 }
 
@@ -58,42 +67,8 @@ pub fn stop_loopback() {
         sink.stop();
     }
     *guard = None;
-}
-
-/// 简单的 f32 音频源，包装 Vec<f32> 为 rodio Source
-struct F32Source {
-    data: Vec<f32>,
-    pos: usize,
-    sample_rate: u32,
-    channels: u16,
-}
-
-impl Iterator for F32Source {
-    type Item = f32;
-    fn next(&mut self) -> Option<f32> {
-        if self.pos < self.data.len() {
-            let s = self.data[self.pos];
-            self.pos += 1;
-            Some(s)
-        } else {
-            None
-        }
-    }
-}
-
-impl Source for F32Source {
-    fn current_frame_len(&self) -> Option<usize> {
-        Some(self.data.len().saturating_sub(self.pos))
-    }
-    fn channels(&self) -> u16 {
-        self.channels
-    }
-    fn sample_rate(&self) -> u32 {
-        self.sample_rate
-    }
-    fn total_duration(&self) -> Option<Duration> {
-        Some(Duration::from_secs_f64(self.data.len() as f64 / self.sample_rate as f64))
-    }
+    LOOPBACK_COUNTER.store(0, Ordering::Relaxed);
+    tracing::info!("环回监听已停止");
 }
 
 /// 提前初始化音频输出句柄，消除首次按键延迟
