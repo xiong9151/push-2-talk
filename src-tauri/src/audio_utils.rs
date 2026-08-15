@@ -240,53 +240,86 @@ impl NoiseReducer {
     /// input: 16kHz f32 音频块
     /// output: 降噪后的 16kHz f32 音频块
     pub fn process(&mut self, input: &[f32]) -> Vec<f32> {
-        if self.strength <= 0.0 || input.is_empty() {
+        if self.strength <= 0.0 || input.is_empty() || input.len() < 160 {
             return input.to_vec();
         }
 
-        // RNNoise 需要 48kHz 采样率，帧大小 480 样本
-        // 输入 16kHz，重采样到 48kHz (1:3 线性插值)
-        let mut input_48k = Vec::with_capacity(input.len() * 3);
-        for &sample in input {
-            input_48k.push(sample);
-            input_48k.push(sample);
-            input_48k.push(sample);
-        }
+        // RNNoise 工作在 48kHz，帧大小 480 样本 (10ms)
+        // 16kHz → 48kHz：线性插值上采样（1:3），避免简单重复破坏频域特征
+        // 否则神经网络会把重复引入的高频谐波误判为语音信号
+        let input_48k = Self::resample_linear(input, 16000, 48000);
 
-        let mut output_48k = vec![0.0f32; input_48k.len()];
-        let frame_count = input_48k.len() / 480;
-        for i in 0..frame_count {
-            let start = i * 480;
+        // 对齐到 480 帧边界
+        let num_frames = input_48k.len() / 480;
+        if num_frames == 0 { return input.to_vec(); }
+        let aligned_len = num_frames * 480;
+
+        let mut output = Vec::with_capacity(input.len());
+
+        for fi in 0..num_frames {
+            let start = fi * 480;
             let mut frame = [0.0f32; 480];
-            let end = (start + 480).min(input_48k.len());
-            let actual_len = end - start;
-            if actual_len < 480 {
-                frame[..actual_len].copy_from_slice(&input_48k[start..end]);
-            } else {
-                frame.copy_from_slice(&input_48k[start..end]);
-            }
+            frame.copy_from_slice(&input_48k[start..start + 480]);
 
             let mut denoised = [0.0f32; 480];
             self.state.process_frame(&mut denoised, &frame);
 
+            // 按强度混合
             if self.strength < 1.0 {
-                for j in 0..actual_len {
+                for j in 0..480 {
                     denoised[j] = denoised[j] * self.strength + frame[j] * (1.0 - self.strength);
                 }
             }
 
-            let actual_end = (start + 480).min(output_48k.len());
-            let copy_len = actual_end - start;
-            output_48k[start..start + copy_len].copy_from_slice(&denoised[..copy_len]);
+            // 48kHz → 16kHz 降采样（3:1 抽取，取中间值减小 aliasing）
+            for j in 0..160 {
+                output.push(denoised[j * 3 + 1]);
+            }
         }
 
-        // 降采样回 16kHz (3:1)
-        let output_len = output_48k.len() / 3;
-        let mut output = Vec::with_capacity(output_len);
-        for i in 0..output_len {
-            output.push(output_48k[i * 3]);
-        }
         output
+    }
+
+    /// 线性插值重采样
+    fn resample_linear(input: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
+        if from_rate == to_rate || input.is_empty() {
+            return input.to_vec();
+        }
+        let ratio = from_rate as f64 / to_rate as f64;
+        let out_len = (input.len() as f64 / ratio) as usize;
+        let mut out = Vec::with_capacity(out_len);
+        for i in 0..out_len {
+            let src = i as f64 * ratio;
+            let lo = src.floor() as usize;
+            let hi = (lo + 1).min(input.len().saturating_sub(1));
+            let frac = src - lo as f64;
+            if lo < input.len() {
+                let s = input[lo] as f64 * (1.0 - frac) + input[hi] as f64 * frac;
+                out.push(s as f32);
+            }
+        }
+        out
+    }
+
+    /// 线性插值重采样（匹配 recorders 里的实现）
+    fn resample_linear(input: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
+        if from_rate == to_rate || input.is_empty() {
+            return input.to_vec();
+        }
+        let ratio = from_rate as f64 / to_rate as f64;
+        let out_len = (input.len() as f64 / ratio) as usize;
+        let mut out = Vec::with_capacity(out_len);
+        for i in 0..out_len {
+            let src = i as f64 * ratio;
+            let lo = src.floor() as usize;
+            let hi = (lo + 1).min(input.len().saturating_sub(1));
+            let frac = src - lo as f64;
+            if lo < input.len() {
+                let s = input[lo] as f64 * (1.0 - frac) + input[hi] as f64 * frac;
+                out.push(s as f32);
+            }
+        }
+        out
     }
 }
 
