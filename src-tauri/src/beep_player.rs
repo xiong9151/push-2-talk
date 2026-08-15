@@ -1,7 +1,7 @@
 use rodio::{OutputStream, OutputStreamHandle, Sink, Source};
-use rodio::source::SamplesBuffer;
-use std::sync::Mutex;
+use std::io::Cursor;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 
 // 在编译时嵌入提示音 WAV 文件
@@ -44,15 +44,31 @@ pub fn init_loopback_sink() {
 }
 
 /// 将一段处理后音频追加到环回监听播放队列
+/// 编码为内存 WAV → rodio Decoder 播放（兼容性最好）
 pub fn loopback_play(samples: &[f32]) {
     if samples.is_empty() {
         return;
     }
     let mut guard = LOOPBACK_SINK.lock().unwrap();
     if let Some(ref sink) = *guard {
-        let source = SamplesBuffer::new(1, 16000, samples.to_vec());
-        sink.append(source);
-        // 每 100 次打一次日志确认环回正在工作
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 16000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut wav_data = Vec::with_capacity(44 + samples.len() * 2);
+        if let Ok(mut writer) = hound::WavWriter::new(Cursor::new(&mut wav_data), spec) {
+            for &s in samples {
+                let amp = (s * 32768.0).clamp(-32768.0, 32767.0) as i16;
+                let _ = writer.write_sample(amp);
+            }
+            if writer.finalize().is_ok() {
+                if let Ok(source) = rodio::Decoder::new(Cursor::new(wav_data)) {
+                    sink.append(source);
+                }
+            }
+        }
         let prev = LOOPBACK_COUNTER.fetch_add(1, Ordering::Relaxed);
         if prev % 100 == 0 {
             tracing::info!("环回监听: 已播放 {} 块, 当前块 {} 样本", prev + 1, samples.len());
