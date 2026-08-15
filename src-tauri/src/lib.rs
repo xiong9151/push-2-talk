@@ -1130,6 +1130,34 @@ async fn patch_config_fields(app: AppHandle, patch: ConfigFieldPatch) -> Result<
 
     emit_config_updated(&app, &updated_config);
 
+    // 同步音频处理配置到运行时录音器（patch 只存磁盘，需同步到内存）
+    let audio_cfg = audio_utils::AudioProcessConfig {
+        noise_reduction_strength: updated_config.noise_reduction_strength,
+        enable_aec: updated_config.enable_aec,
+        enable_loopback: updated_config.enable_loopback,
+    };
+    let state = app.state::<AppState>();
+    {
+        let mut sg = state
+            .streaming_recorder
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(ref mut rec) = *sg {
+            rec.set_audio_processing_config(&audio_cfg);
+        }
+    }
+    {
+        let mut rg = state
+            .audio_recorder
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        if let Some(ref mut rec) = *rg {
+            rec.set_audio_processing_config(&audio_cfg);
+        }
+    }
+
+    tracing::info!("[patch_config_fields] 配置已更新, theme={}", updated_config.theme);
+
     Ok("配置字段已更新".to_string())
 }
 

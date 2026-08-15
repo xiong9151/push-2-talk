@@ -44,11 +44,18 @@ pub fn init_loopback_sink() {
 
 /// 将一段处理后音频追加到环回监听播放队列
 /// 编码为内存 WAV → rodio Decoder 播放（兼容性最好）
+/// 如果 Sink 尚未初始化，自动初始化（支持运行时开启）
 pub fn loopback_play(samples: &[f32]) {
     if samples.is_empty() {
         return;
     }
-    let guard = LOOPBACK_SINK.lock().unwrap();
+    let mut guard = LOOPBACK_SINK.lock().unwrap();
+    // 如果 Sink 尚未初始化，自动初始化（支持运行时开启）
+    if guard.is_none() {
+        drop(guard);
+        init_loopback_sink();
+        guard = LOOPBACK_SINK.lock().unwrap();
+    }
     if let Some(ref sink) = *guard {
         let spec = hound::WavSpec {
             channels: 1,
@@ -57,7 +64,6 @@ pub fn loopback_play(samples: &[f32]) {
             sample_format: hound::SampleFormat::Int,
         };
         let mut wav_data = Vec::with_capacity(44 + samples.len() * 2);
-        // 独立作用域：确保 WavWriter 在移动 wav_data 之前被 drop（解除借用）
         {
             let cursor = std::io::Cursor::new(&mut wav_data);
             if let Ok(mut writer) = hound::WavWriter::new(cursor, spec) {
