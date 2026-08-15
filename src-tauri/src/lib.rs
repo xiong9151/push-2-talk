@@ -2123,6 +2123,7 @@ async fn start_app(
     }
 
     // 应用降噪配置到录音器
+    let loopback_enabled: bool;
     {
         let config = load_persisted_config().unwrap_or_else(|e| {
             tracing::warn!("加载配置失败: {}", e);
@@ -2133,6 +2134,7 @@ async fn start_app(
             enable_aec: config.enable_aec,
             enable_loopback: config.enable_loopback,
         };
+        loopback_enabled = config.enable_loopback;
         if use_realtime_mode {
             if let Some(ref mut rec) = *state.streaming_recorder.lock().unwrap_or_else(|e| e.into_inner()) {
                 rec.set_audio_processing_config(&audio_cfg);
@@ -2145,7 +2147,7 @@ async fn start_app(
     }
 
     // 启动/停止独立环回麦克风监听
-    if config.enable_loopback {
+    if loopback_enabled {
         beep_player::start_mic_monitor();
     } else {
         beep_player::stop_mic_monitor();
