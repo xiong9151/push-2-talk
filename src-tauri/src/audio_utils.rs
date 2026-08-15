@@ -252,7 +252,6 @@ impl NoiseReducer {
         // 对齐到 480 帧边界
         let num_frames = input_48k.len() / 480;
         if num_frames == 0 { return input.to_vec(); }
-        let aligned_len = num_frames * 480;
 
         let mut output = Vec::with_capacity(input.len());
 
@@ -281,27 +280,6 @@ impl NoiseReducer {
     }
 
     /// 线性插值重采样
-    fn resample_linear(input: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
-        if from_rate == to_rate || input.is_empty() {
-            return input.to_vec();
-        }
-        let ratio = from_rate as f64 / to_rate as f64;
-        let out_len = (input.len() as f64 / ratio) as usize;
-        let mut out = Vec::with_capacity(out_len);
-        for i in 0..out_len {
-            let src = i as f64 * ratio;
-            let lo = src.floor() as usize;
-            let hi = (lo + 1).min(input.len().saturating_sub(1));
-            let frac = src - lo as f64;
-            if lo < input.len() {
-                let s = input[lo] as f64 * (1.0 - frac) + input[hi] as f64 * frac;
-                out.push(s as f32);
-            }
-        }
-        out
-    }
-
-    /// 线性插值重采样（匹配 recorders 里的实现）
     fn resample_linear(input: &[f32], from_rate: u32, to_rate: u32) -> Vec<f32> {
         if from_rate == to_rate || input.is_empty() {
             return input.to_vec();
