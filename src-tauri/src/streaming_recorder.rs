@@ -11,9 +11,6 @@ use std::sync::{
 use tauri::AppHandle;
 
 use crate::audio_utils::{
-    apply_agc, calculate_audio_level, emit_audio_level, is_voice_active, validate_audio,
-    NoiseReducer, AudioProcessConfig,
-};
 
 // API 要求的目标采样率
 const TARGET_SAMPLE_RATE: u32 = 16000;
@@ -35,7 +32,9 @@ pub struct StreamingRecorder {
     data_written: Arc<AtomicBool>,
     // RNNoise 降噪器（通过 Arc<Mutex> 供回调使用）
     noise_reducer: Arc<Mutex<Option<NoiseReducer>>>,
-    // SpeexDSP AEC 处理器（仅在 enable_aec && enable_loopback 时初始化）
+    // 环回监听开关：开启后将处理后的音频实时播放到扬声器
+    loopback_enabled: Arc<AtomicBool>,
+    // SpeexDSP AEC 处理器（仅在 enable_aec 时初始化）
     #[cfg(feature = "aec")]
     aec_state: Arc<Mutex<Option<crate::aec::processor::AecProcessor>>>,
     // 远端（扬声器环回）音频块通道：loopback 回调 push，mic 回调 pull
@@ -57,6 +56,7 @@ impl StreamingRecorder {
             full_audio_data: Arc::new(Mutex::new(Vec::new())),
             data_written: Arc::new(AtomicBool::new(false)),
             noise_reducer: Arc::new(Mutex::new(None)),
+            loopback_enabled: Arc::new(AtomicBool::new(false)),
             #[cfg(feature = "aec")]
             aec_state: Arc::new(Mutex::new(None)),
             #[cfg(feature = "aec")]
@@ -121,7 +121,7 @@ impl StreamingRecorder {
             .collect()
     }
 
-    /// RNNoise 降噪配置设置
+    /// 音频处理配置设置（RNNoise 降噪 + 环回监听 + AEC）
     pub fn set_audio_processing_config(&mut self, config: &AudioProcessConfig) {
         let mut reducer = self.noise_reducer.lock().unwrap_or_else(|e| e.into_inner());
         if config.noise_reduction_strength > 0 {
@@ -129,7 +129,12 @@ impl StreamingRecorder {
         } else {
             *reducer = None;
         }
-        tracing::info!("降噪配置已更新: strength={}", config.noise_reduction_strength);
+        self.loopback_enabled.store(config.enable_loopback, Ordering::Release);
+        tracing::info!(
+            "降噪配置已更新: strength={}, loopback={}",
+            config.noise_reduction_strength,
+            config.enable_loopback
+        );
 
         #[cfg(feature = "aec")]
         {
@@ -147,7 +152,7 @@ impl StreamingRecorder {
                     aec.take();
                 }
                 if config.enable_aec && !config.enable_loopback {
-                    tracing::warn!("AEC 已开启但环回采集未开启 — AEC 无参考信号，将作为 no-op");
+                    tracing::warn!("AEC 已开启但环回监听未开启 — AEC 无参考信号，将作为 no-op");
                 }
             }
         }
@@ -160,8 +165,16 @@ impl StreamingRecorder {
 
         // 添加降噪器引用用于回调闭包（在 self.noise_reducer 上 clone）
         let noise_reducer_clone = Arc::clone(&self.noise_reducer);
+        // 环回监听开关引用
+        let loopback_enabled_clone = Arc::clone(&self.loopback_enabled);
 
         tracing::info!("开始流式录音...");
+
+        // 如果环回监听已开启，初始化 Sink 准备播放
+        if self.loopback_enabled.load(Ordering::Acquire) {
+            crate::beep_player::init_loopback_sink();
+            tracing::info!("环回监听已初始化");
+        }
 
         // 清空之前的数据
         self.full_audio_data.lock().unwrap_or_else(|e| e.into_inner()).clear();
@@ -221,6 +234,7 @@ impl StreamingRecorder {
 
         // 降噪器引用（供 F32 回调使用）
         let noise_reducer_clone_f32 = Arc::clone(&noise_reducer_clone);
+        // 环回监听开关引用（已在 start_streaming 顶部克隆）
 
         // AEC 相关引用（仅 aec feature 下）
         #[cfg(feature = "aec")]
@@ -318,6 +332,11 @@ impl StreamingRecorder {
                             chunk.copy_from_slice(&denoised);
                         }
 
+                        // 环回监听：将处理后的音频实时播放到扬声器
+                        if loopback_enabled_clone.load(Ordering::Acquire) {
+                            crate::beep_player::loopback_play(&chunk);
+                        }
+
                         let chunk_i16 = Self::f32_to_i16(&chunk);
 
                         if chunk_tx.try_send(chunk_i16).is_err() {
@@ -338,6 +357,7 @@ impl StreamingRecorder {
                 let app_handle_i16 = app_handle.clone();
                 let vad_hangover_i16 = Arc::clone(&vad_hangover);
                 let agc_gain_i16 = Arc::clone(&agc_gain);
+                let loopback_enabled_i16 = Arc::clone(&self.loopback_enabled);
 
                 device.build_input_stream(
                     &config,
@@ -410,6 +430,11 @@ impl StreamingRecorder {
                             apply_agc(&mut chunk, &mut gain);
                             drop(gain);
 
+                            // 环回监听：将处理后的音频实时播放到扬声器
+                            if loopback_enabled_i16.load(Ordering::Acquire) {
+                                crate::beep_player::loopback_play(&chunk);
+                            }
+
                             let chunk_i16 = Self::f32_to_i16(&chunk);
 
                             if chunk_tx_i16.try_send(chunk_i16).is_err() {
@@ -431,6 +456,7 @@ impl StreamingRecorder {
                 let app_handle_u16 = app_handle;
                 let vad_hangover_u16 = Arc::clone(&vad_hangover);
                 let agc_gain_u16 = Arc::clone(&agc_gain);
+                let loopback_enabled_u16 = Arc::clone(&self.loopback_enabled);
 
                 device.build_input_stream(
                     &config,
@@ -504,6 +530,11 @@ impl StreamingRecorder {
                             let mut gain = agc_gain_u16.lock().unwrap_or_else(|e| e.into_inner());
                             apply_agc(&mut chunk, &mut gain);
                             drop(gain);
+
+                            // 环回监听：将处理后的音频实时播放到扬声器
+                            if loopback_enabled_u16.load(Ordering::Acquire) {
+                                crate::beep_player::loopback_play(&chunk);
+                            }
 
                             let chunk_i16 = Self::f32_to_i16(&chunk);
 
@@ -582,6 +613,9 @@ impl StreamingRecorder {
         // 最后 drop stream
         self.stream = None;
         self.chunk_sender = None;
+
+        // 停止环回监听播放
+        crate::beep_player::stop_loopback();
 
         // 停止 loopback 环回采集流（AEC 远端）
         #[cfg(feature = "aec")]

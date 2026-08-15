@@ -1,5 +1,7 @@
 use rodio::{OutputStream, OutputStreamHandle, Sink, Source};
 use std::io::Cursor;
+use std::sync::Mutex;
+use std::time::Duration;
 
 // 在编译时嵌入提示音 WAV 文件
 const START_BEEP: &[u8] = include_bytes!("../resources/start_beep.wav");
@@ -11,6 +13,88 @@ const VOLUME: f32 = 0.2;
 
 /// 预初始化的音频输出句柄（Send + Sync，可安全跨线程使用）
 static STREAM_HANDLE: std::sync::OnceLock<OutputStreamHandle> = std::sync::OnceLock::new();
+
+/// 环回监听（实时回放处理后的音频到扬声器）
+/// 使用独立的 Sink，在录音期间持续追加音频帧
+static LOOPBACK_SINK: Mutex<Option<Sink>> = Mutex::new(None);
+
+/// 初始化环回监听的 Sink
+pub fn init_loopback_sink() {
+    if let Some(handle) = STREAM_HANDLE.get() {
+        if let Ok(sink) = Sink::try_new(handle) {
+            sink.set_volume(0.5);
+            let mut guard = LOOPBACK_SINK.lock().unwrap();
+            // 停止旧的 sink（如果有）
+            if let Some(ref old) = *guard {
+                old.stop();
+            }
+            *guard = Some(sink);
+        }
+    }
+}
+
+/// 将一段处理后音频追加到环回监听播放队列
+/// 直接使用 f32 源，无需经过 WAV 编码/解码
+pub fn loopback_play(samples: &[f32]) {
+    if samples.is_empty() {
+        return;
+    }
+    let mut guard = LOOPBACK_SINK.lock().unwrap();
+    if let Some(ref sink) = *guard {
+        let source = F32Source {
+            data: samples.to_vec(),
+            pos: 0,
+            sample_rate: 16000,
+            channels: 1,
+        };
+        sink.append(source);
+    }
+}
+
+/// 停止环回监听播放
+pub fn stop_loopback() {
+    let mut guard = LOOPBACK_SINK.lock().unwrap();
+    if let Some(ref sink) = *guard {
+        sink.stop();
+    }
+    *guard = None;
+}
+
+/// 简单的 f32 音频源，包装 Vec<f32> 为 rodio Source
+struct F32Source {
+    data: Vec<f32>,
+    pos: usize,
+    sample_rate: u32,
+    channels: u16,
+}
+
+impl Iterator for F32Source {
+    type Item = f32;
+    fn next(&mut self) -> Option<f32> {
+        if self.pos < self.data.len() {
+            let s = self.data[self.pos];
+            self.pos += 1;
+            Some(s)
+        } else {
+            None
+        }
+    }
+}
+
+impl Source for F32Source {
+    fn current_frame_len(&self) -> Option<usize> {
+        Some(self.data.len().saturating_sub(self.pos))
+    }
+    fn channels(&self) -> u16 {
+        self.channels
+    }
+    fn sample_rate(&self) -> u32 {
+        self.sample_rate
+    }
+    fn total_duration(&self) -> Option<Duration> {
+        Some(Duration::from_secs_f64(self.data.len() as f64 / self.sample_rate as f64))
+    }
+}
 
 /// 提前初始化音频输出句柄，消除首次按键延迟
 pub fn preinit() {

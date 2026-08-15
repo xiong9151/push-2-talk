@@ -457,7 +457,7 @@ export function PreferencesPage({
             />
           </div>
 
-          {/* 环回采集 */}
+          {/* 环回监听 */}
           <div className="flex items-center justify-between p-4 bg-[var(--paper)] border border-[var(--stone)] rounded-2xl">
             <div className="flex items-center gap-3">
               <div
@@ -471,9 +471,9 @@ export function PreferencesPage({
                 <Radio size={16} />
               </div>
               <div>
-                <div className="text-sm font-bold text-[var(--ink)]">环回采集 (Loopback)</div>
+                <div className="text-sm font-bold text-[var(--ink)]">环回监听 (Loopback)</div>
                 <div className="text-[11px] text-stone-400 font-semibold">
-                  捕获系统扬声器输出，作为回声消除的远端参考信号（须与 AEC 同时开启）
+                  实时将处理后的音频播放到扬声器，用于试听降噪效果
                 </div>
               </div>
             </div>
