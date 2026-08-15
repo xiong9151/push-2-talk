@@ -143,7 +143,7 @@ impl StreamingRecorder {
                     crate::aec::AEC_FILTER_LENGTH
                 );
             } else {
-                if *aec.is_some() {
+                if aec.is_some() {
                     aec.take();
                 }
                 if config.enable_aec && !config.enable_loopback {

@@ -238,6 +238,9 @@ impl NormalPipeline {
         gen_counter: Arc<AtomicU64>,
         preset_gen: u64,
     ) -> (Vec<TranscriptionResultItem>, String, Option<String>, Option<u64>) {
+        // enable_live_transcript 控制实时流式转录显示，在此预设构建阶段不参与决策，
+        // 保留参数以匹配调用签名（上层 handle_transcription_result 已读取使用）。
+        let _ = enable_live_transcript;
         // 至少包含原文作为第一项
         let mut items: Vec<TranscriptionResultItem> = vec![TranscriptionResultItem {
             id: "original".to_string(),

@@ -134,11 +134,12 @@ where
         Ok(s) => s,
         Err(_) => {
             // Fallback: assume stereo 48 kHz (typical WASAPI shared mode).
+            // cpal::SupportedStreamConfig::new(channels, sample_rate, buffer_size, sample_format)
             cpal::SupportedStreamConfig::new(
-                cpal::SampleFormat::F32,
                 2,
                 cpal::SampleRate(48000),
-                cpal::SupportedBufferSize::default(),
+                cpal::SupportedBufferSize::Unknown,
+                cpal::SampleFormat::F32,
             )
         }
     };

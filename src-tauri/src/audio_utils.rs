@@ -219,7 +219,7 @@ pub fn validate_audio(audio_data: &[u8]) -> Result<()> {
 /// 使用 nnnoiseless (纯 Rust RNNoise 移植) 进行音频降噪
 /// 处理 48kHz 音频，帧大小 480 样本 (10ms)
 pub struct NoiseReducer {
-    state: DenoiseState,
+    state: Box<DenoiseState<'static>>,
     /// 降噪强度: 0.0 = 关闭, 1.0 = 最大降噪
     strength: f32,
 }
