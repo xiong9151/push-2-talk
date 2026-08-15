@@ -41,14 +41,15 @@ pub fn start_mic_monitor() {
                 return;
             }
         };
-        let config = match device.default_input_config() {
-            Ok(c) => c.config(),
+        let supported_config = match device.default_input_config() {
+            Ok(c) => c,
             Err(e) => {
                 tracing::warn!("环回监听: 无法获取麦克风配置: {}", e);
                 LOOPBACK_STREAM_ON.store(false, Ordering::SeqCst);
                 return;
             }
         };
+        let config = supported_config.config();
         let device_rate = config.sample_rate.0;
         let channels = config.channels;
         let err_fn = |err| tracing::error!("环回监听流错误: {}", err);
@@ -57,61 +58,122 @@ pub fn start_mic_monitor() {
         let mut reducer = crate::audio_utils::NoiseReducer::new(0.5);
         let mut agc_gain = 1.0f32;
 
-        let stream = device.build_input_stream::<f32, _, _>(
-            &config,
-            move |data: &[f32], _: &cpal::InputCallbackInfo| {
-                if !LOOPBACK_STREAM_ON.load(Ordering::SeqCst) {
-                    return;
-                }
-                // 转单声道
-                let mono = if channels > 1 {
-                    data.chunks(channels as usize)
-                        .map(|ch| ch.iter().sum::<f32>() / channels as f32)
-                        .collect::<Vec<_>>()
-                } else {
-                    data.to_vec()
-                };
-                // 降采样到 16kHz
-                let ratio = device_rate as f64 / 16000.0;
-                let out_len = (mono.len() as f64 / ratio) as usize;
-                let mut resampled = Vec::with_capacity(out_len);
-                for i in 0..out_len {
-                    let src = i as f64 * ratio;
-                    let lo = src.floor() as usize;
-                    let hi = (lo + 1).min(mono.len().saturating_sub(1));
-                    let frac = src - lo as f64;
-                    if lo < mono.len() {
-                        resampled.push((mono[lo] as f64 * (1.0 - frac) + mono[hi] as f64 * frac) as f32);
-                    }
-                }
-                // AGC
-                for chunk in resampled.chunks_mut(3200) {
-                    crate::audio_utils::apply_agc(chunk, &mut agc_gain);
-                }
-                // RNNoise 降噪
-                let mut denoised_all = Vec::with_capacity(resampled.len());
-                for chunk in resampled.chunks(3200) {
-                    let d = reducer.process(chunk);
-                    denoised_all.extend_from_slice(&d);
-                }
-                // 播放到扬声器
-                loopback_play_inner(&denoised_all);
-            },
-            err_fn,
-            None,
-        );
+        // 格式无关的原始数据收集（所有格式都先转成 f32 再统一处理）
+        let raw_f32: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
+        let is_recording: Arc<AtomicBool> = Arc::new(AtomicBool::new(true));
+
+        let stream = match supported_config.sample_format() {
+            cpal::SampleFormat::F32 => {
+                let raw = Arc::clone(&raw_f32);
+                let flag = Arc::clone(&is_recording);
+                device.build_input_stream(
+                    &config,
+                    move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                        if !flag.load(Ordering::SeqCst) { return; }
+                        raw.lock().unwrap().extend_from_slice(data);
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            cpal::SampleFormat::I16 => {
+                let raw = Arc::clone(&raw_f32);
+                let flag = Arc::clone(&is_recording);
+                device.build_input_stream(
+                    &config,
+                    move |data: &[i16], _: &cpal::InputCallbackInfo| {
+                        if !flag.load(Ordering::SeqCst) { return; }
+                        let f32_data: Vec<f32> = data.iter().map(|&s| s as f32 / i16::MAX as f32).collect();
+                        raw.lock().unwrap().extend(f32_data);
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            cpal::SampleFormat::U16 => {
+                let raw = Arc::clone(&raw_f32);
+                let flag = Arc::clone(&is_recording);
+                device.build_input_stream(
+                    &config,
+                    move |data: &[u16], _: &cpal::InputCallbackInfo| {
+                        if !flag.load(Ordering::SeqCst) { return; }
+                        let f32_data: Vec<f32> = data.iter().map(|&s| (s as f32 - 32768.0) / 32768.0).collect();
+                        raw.lock().unwrap().extend(f32_data);
+                    },
+                    err_fn,
+                    None,
+                )
+            }
+            _ => {
+                tracing::warn!("环回监听: 不支持的采样格式");
+                LOOPBACK_STREAM_ON.store(false, Ordering::SeqCst);
+                return;
+            }
+        };
 
         match stream {
             Ok(s) => {
                 if let Err(e) = s.play() {
                     tracing::warn!("环回监听: 启动播放失败: {}", e);
+                    LOOPBACK_STREAM_ON.store(false, Ordering::SeqCst);
+                    return;
                 }
-                tracing::info!("环回监听: 独立麦克风监听已启动, 采样率={}, 声道={}", device_rate, channels);
-                // 保持线程存活（stream 随线程一起销毁）
+                tracing::info!("环回监听: 已启动, 采样率={}, 声道={}, 格式={:?}", device_rate, channels, supported_config.sample_format());
+                // 处理循环：每 50ms 从 raw_f32 取数据，处理并播放
+                let mut last_pos = 0usize;
                 while LOOPBACK_STREAM_ON.load(Ordering::SeqCst) {
-                    std::thread::sleep(std::time::Duration::from_millis(500));
+                    let chunk: Vec<f32> = {
+                        let mut buf = raw_f32.lock().unwrap();
+                        if buf.len() > last_pos + 3200 {
+                            let c = buf[last_pos..last_pos + 3200].to_vec();
+                            last_pos += 3200;
+                            // 防止 buf 无限增长
+                            if last_pos > 96000 {
+                                buf.drain(0..last_pos);
+                                last_pos = 0;
+                            }
+                            c
+                        } else {
+                            Vec::new()
+                        }
+                    };
+                    if !chunk.is_empty() {
+                        // 转单声道
+                        let mono = if channels > 1 {
+                            chunk.chunks(channels as usize)
+                                .map(|ch| ch.iter().sum::<f32>() / channels as f32)
+                                .collect::<Vec<_>>()
+                        } else {
+                            chunk
+                        };
+                        // 降采样到 16kHz
+                        let ratio = device_rate as f64 / 16000.0;
+                        let out_len = (mono.len() as f64 / ratio) as usize;
+                        let mut resampled = Vec::with_capacity(out_len);
+                        for i in 0..out_len {
+                            let src = i as f64 * ratio;
+                            let lo = src.floor() as usize;
+                            let hi = (lo + 1).min(mono.len().saturating_sub(1));
+                            let frac = src - lo as f64;
+                            if lo < mono.len() {
+                                resampled.push((mono[lo] as f64 * (1.0 - frac) + mono[hi] as f64 * frac) as f32);
+                            }
+                        }
+                        // AGC
+                        for c in resampled.chunks_mut(3200) {
+                            crate::audio_utils::apply_agc(c, &mut agc_gain);
+                        }
+                        // RNNoise 降噪
+                        let mut denoised = Vec::with_capacity(resampled.len());
+                        for c in resampled.chunks(3200) {
+                            let d = reducer.process(c);
+                            denoised.extend_from_slice(&d);
+                        }
+                        // 播放
+                        loopback_play_inner(&denoised);
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(30));
                 }
-                // 退出时 drop stream
                 drop(s);
             }
             Err(e) => {
@@ -119,7 +181,7 @@ pub fn start_mic_monitor() {
             }
         }
         LOOPBACK_STREAM_ON.store(false, Ordering::SeqCst);
-        tracing::info!("环回监听: 独立麦克风监听已停止");
+        tracing::info!("环回监听: 已停止");
     });
 }
 
