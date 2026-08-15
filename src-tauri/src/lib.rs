@@ -1156,6 +1156,15 @@ async fn patch_config_fields(app: AppHandle, patch: ConfigFieldPatch) -> Result<
         }
     }
 
+    // 独立环回麦克风监听：打开开关后直接启动麦克风监听，关闭开关则停止
+    if let Some(enabled) = patch.enable_loopback {
+        if enabled {
+            beep_player::start_mic_monitor();
+        } else {
+            beep_player::stop_mic_monitor();
+        }
+    }
+
     tracing::info!("[patch_config_fields] 配置已更新, theme={}", updated_config.theme);
 
     Ok("配置字段已更新".to_string())
@@ -2133,6 +2142,13 @@ async fn start_app(
                 rec.set_audio_processing_config(&audio_cfg);
             }
         }
+    }
+
+    // 启动/停止独立环回麦克风监听
+    if config.enable_loopback {
+        beep_player::start_mic_monitor();
+    } else {
+        beep_player::stop_mic_monitor();
     }
 
     // 启动全局快捷键监听（双模式支持）
@@ -4339,6 +4355,9 @@ async fn stop_app(app_handle: AppHandle) -> Result<String, String> {
     hide_result_panel_window(&app_handle).await;
 
     *state.is_running.lock().unwrap_or_else(|e| e.into_inner()) = false;
+
+    // 停止独立环回麦克风监听
+    beep_player::stop_mic_monitor();
 
     Ok("应用已停止".to_string())
 }

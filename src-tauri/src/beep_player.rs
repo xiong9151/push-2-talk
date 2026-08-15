@@ -1,6 +1,6 @@
 use rodio::{OutputStream, OutputStreamHandle, Sink, Source};
 use std::io::Cursor;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 
 // 在编译时嵌入提示音 WAV 文件
@@ -19,6 +19,116 @@ static STREAM_HANDLE: std::sync::OnceLock<OutputStreamHandle> = std::sync::OnceL
 static LOOPBACK_SINK: Mutex<Option<Sink>> = Mutex::new(None);
 /// 环回监听播放计数器（调试用）
 static LOOPBACK_COUNTER: AtomicU64 = AtomicU64::new(0);
+/// 独立环回模式：不依赖录音，麦克风直接实时监听并回放
+static LOOPBACK_STREAM_ON: AtomicBool = AtomicBool::new(false);
+
+/// 启动独立麦克风监听环回 — 打开开关后实时采集麦克风，处理（降噪+AGC）后播放到扬声器
+pub fn start_mic_monitor() {
+    if LOOPBACK_STREAM_ON.load(Ordering::SeqCst) {
+        return;
+    }
+    LOOPBACK_STREAM_ON.store(true, Ordering::SeqCst);
+    // 初始化 Sink
+    init_loopback_sink();
+    std::thread::spawn(move || {
+        use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+        let host = cpal::default_host();
+        let device = match host.default_input_device() {
+            Some(d) => d,
+            None => {
+                tracing::warn!("环回监听: 无麦克风设备");
+                LOOPBACK_STREAM_ON.store(false, Ordering::SeqCst);
+                return;
+            }
+        };
+        let config = match device.default_input_config() {
+            Ok(c) => c.config(),
+            Err(e) => {
+                tracing::warn!("环回监听: 无法获取麦克风配置: {}", e);
+                LOOPBACK_STREAM_ON.store(false, Ordering::SeqCst);
+                return;
+            }
+        };
+        let device_rate = config.sample_rate.0;
+        let channels = config.channels;
+        let err_fn = |err| tracing::error!("环回监听流错误: {}", err);
+
+        // 降噪器和 AGC 状态
+        let mut reducer = crate::audio_utils::NoiseReducer::new(0.5);
+        let mut agc_gain = 1.0f32;
+
+        let stream = device.build_input_stream::<f32, _, _>(
+            &config,
+            move |data: &[f32], _: &cpal::InputCallbackInfo| {
+                if !LOOPBACK_STREAM_ON.load(Ordering::SeqCst) {
+                    return;
+                }
+                // 转单声道
+                let mono = if channels > 1 {
+                    data.chunks(channels as usize)
+                        .map(|ch| ch.iter().sum::<f32>() / channels as f32)
+                        .collect::<Vec<_>>()
+                } else {
+                    data.to_vec()
+                };
+                // 降采样到 16kHz
+                let ratio = device_rate as f64 / 16000.0;
+                let out_len = (mono.len() as f64 / ratio) as usize;
+                let mut resampled = Vec::with_capacity(out_len);
+                for i in 0..out_len {
+                    let src = i as f64 * ratio;
+                    let lo = src.floor() as usize;
+                    let hi = (lo + 1).min(mono.len().saturating_sub(1));
+                    let frac = src - lo as f64;
+                    if lo < mono.len() {
+                        resampled.push((mono[lo] as f64 * (1.0 - frac) + mono[hi] as f64 * frac) as f32);
+                    }
+                }
+                // AGC
+                for chunk in resampled.chunks_mut(3200) {
+                    crate::audio_utils::apply_agc(chunk, &mut agc_gain);
+                }
+                // RNNoise 降噪
+                let mut denoised_all = Vec::with_capacity(resampled.len());
+                for chunk in resampled.chunks(3200) {
+                    let d = reducer.process(chunk);
+                    denoised_all.extend_from_slice(&d);
+                }
+                // 播放到扬声器
+                loopback_play_inner(&denoised_all);
+            },
+            err_fn,
+            None,
+        );
+
+        match stream {
+            Ok(s) => {
+                if let Err(e) = s.play() {
+                    tracing::warn!("环回监听: 启动播放失败: {}", e);
+                }
+                tracing::info!("环回监听: 独立麦克风监听已启动, 采样率={}, 声道={}", device_rate, channels);
+                // 保持线程存活（stream 随线程一起销毁）
+                while LOOPBACK_STREAM_ON.load(Ordering::SeqCst) {
+                    std::thread::sleep(std::time::Duration::from_millis(500));
+                }
+                // 退出时 drop stream
+                drop(s);
+            }
+            Err(e) => {
+                tracing::warn!("环回监听: 创建监听流失败: {}", e);
+            }
+        }
+        LOOPBACK_STREAM_ON.store(false, Ordering::SeqCst);
+        tracing::info!("环回监听: 独立麦克风监听已停止");
+    });
+}
+
+/// 停止独立麦克风监听环回
+pub fn stop_mic_monitor() {
+    LOOPBACK_STREAM_ON.store(false, Ordering::SeqCst);
+    stop_loopback();
+    tracing::info!("环回监听: 已发送停止信号");
+}
 
 /// 初始化环回监听的 Sink
 pub fn init_loopback_sink() {
@@ -80,6 +190,41 @@ pub fn loopback_play(samples: &[f32]) {
         let prev = LOOPBACK_COUNTER.fetch_add(1, Ordering::Relaxed);
         if prev % 100 == 0 {
             tracing::info!("环回监听: 已播放 {} 块, 当前块 {} 样本", prev + 1, samples.len());
+        }
+    }
+}
+
+/// 内部播放函数：不依赖外部队列锁（供独立环回模式使用）
+fn loopback_play_inner(samples: &[f32]) {
+    if samples.is_empty() {
+        return;
+    }
+    let mut guard = LOOPBACK_SINK.lock().unwrap();
+    if guard.is_none() {
+        drop(guard);
+        init_loopback_sink();
+        guard = LOOPBACK_SINK.lock().unwrap();
+    }
+    if let Some(ref sink) = *guard {
+        let spec = hound::WavSpec {
+            channels: 1,
+            sample_rate: 16000,
+            bits_per_sample: 16,
+            sample_format: hound::SampleFormat::Int,
+        };
+        let mut wav_data = Vec::with_capacity(44 + samples.len() * 2);
+        {
+            let cursor = std::io::Cursor::new(&mut wav_data);
+            if let Ok(mut writer) = hound::WavWriter::new(cursor, spec) {
+                for &s in samples {
+                    let amp = (s * 32768.0).clamp(-32768.0, 32767.0) as i16;
+                    let _ = writer.write_sample(amp);
+                }
+                let _ = writer.finalize();
+            }
+        }
+        if let Ok(source) = rodio::Decoder::new(std::io::Cursor::new(wav_data)) {
+            sink.append(source);
         }
     }
 }
