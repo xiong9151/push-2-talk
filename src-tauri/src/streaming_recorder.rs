@@ -11,6 +11,9 @@ use std::sync::{
 use tauri::AppHandle;
 
 use crate::audio_utils::{
+    apply_agc, calculate_audio_level, emit_audio_level, is_voice_active, validate_audio,
+    NoiseReducer, AudioProcessConfig,
+};
 
 // API 要求的目标采样率
 const TARGET_SAMPLE_RATE: u32 = 16000;
