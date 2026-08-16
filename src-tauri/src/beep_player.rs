@@ -1,6 +1,6 @@
 use rodio::{OutputStream, OutputStreamHandle, Sink, Source};
 use std::io::Cursor;
-use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 // 在编译时嵌入提示音 WAV 文件
@@ -21,11 +21,26 @@ static LOOPBACK_SINK: Mutex<Option<Sink>> = Mutex::new(None);
 static LOOPBACK_COUNTER: AtomicU64 = AtomicU64::new(0);
 /// 独立环回模式：不依赖录音，麦克风直接实时监听并回放
 static LOOPBACK_STREAM_ON: AtomicBool = AtomicBool::new(false);
+/// 环回监听降噪强度（运行时热更新，用户调整 UI 滑块时实时生效）
+/// 存储为 u8 (0-100)，除以 100.0 即得到 f32 强度
+static LOOPBACK_STRENGTH: AtomicU8 = AtomicU8::new(0);
+
+/// 更新环回监听的降噪强度（由 patch_config_fields 调用，实时生效无需重启）
+pub fn update_loopback_strength(strength: u8) {
+    LOOPBACK_STRENGTH.store(strength, Ordering::Release);
+    if LOOPBACK_STREAM_ON.load(Ordering::Acquire) {
+        tracing::info!("环回监听强度已实时更新: {}", strength);
+    } else {
+        tracing::info!("环回监听强度已保存: {}（启动后生效）", strength);
+    }
+}
 
 /// 启动独立麦克风监听环回 — 打开开关后实时采集麦克风，处理（降噪+AGC）后播放到扬声器
 /// strength: 降噪强度 0.0-1.0（试听的目的就是让用户确定档位，使用当前配置的强度）
 pub fn start_mic_monitor(strength: f32) {
     if LOOPBACK_STREAM_ON.load(Ordering::SeqCst) {
+        // 已启动：只更新强度，不重启
+        update_loopback_strength((strength * 100.0) as u8);
         return;
     }
     LOOPBACK_STREAM_ON.store(true, Ordering::SeqCst);
@@ -161,6 +176,9 @@ pub fn start_mic_monitor(strength: f32) {
                             }
                         }
                         // RNNoise 降噪优先（先去掉噪声，避免降噪把音量一起压小）
+                        // 每次处理前从 LOOPBACK_STRENGTH 读取当前强度，支持运行时热更新
+                        let current_strength = LOOPBACK_STRENGTH.load(Ordering::Acquire) as f32 / 100.0;
+                        reducer.set_strength(current_strength);
                         let mut denoised = Vec::with_capacity(resampled.len());
                         for c in resampled.chunks(3200) {
                             let d = reducer.process(c);

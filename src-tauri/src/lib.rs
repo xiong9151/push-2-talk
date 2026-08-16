@@ -1118,6 +1118,8 @@ async fn patch_config_fields(app: AppHandle, patch: ConfigFieldPatch) -> Result<
 
         if let Some(strength) = patch.noise_reduction_strength {
             config.noise_reduction_strength = strength;
+            // 实时更新环回监听的降噪强度（无需重启）
+            beep_player::update_loopback_strength(strength);
         }
         if let Some(enabled) = patch.enable_aec {
             config.enable_aec = enabled;
