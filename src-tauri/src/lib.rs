@@ -18,6 +18,7 @@ mod learning;
 mod llm_post_processor;
 mod openai_client;
 mod pipeline;
+mod rnnoise_ffi;
 mod streaming_recorder;
 mod text_inserter;
 mod tnl;

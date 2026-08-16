@@ -332,7 +332,10 @@ impl StreamingRecorder {
                         // RNNoise 降噪处理
                         if let Some(ref mut reducer) = *noise_reducer_clone_f32.lock().unwrap_or_else(|e| e.into_inner()) {
                             let denoised = reducer.process(&chunk);
-                            chunk.copy_from_slice(&denoised);
+                            // 防止 denoised 比 chunk 短时 copy_from_slice panic；长度不等时整体替换
+                            if denoised.len() >= chunk.len() {
+                                chunk.copy_from_slice(&denoised[..chunk.len()]);
+                            }
                         }
 
                         // 环回监听：将处理后的音频实时播放到扬声器

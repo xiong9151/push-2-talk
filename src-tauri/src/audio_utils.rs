@@ -2,8 +2,9 @@
 // 提供音频级别计算、事件发送等共享功能
 
 use anyhow::Result;
-use nnnoiseless::DenoiseState;
 use tauri::{AppHandle, Emitter};
+
+use crate::rnnoise_ffi;
 
 /// 音频级别事件 payload
 #[derive(Clone, serde::Serialize)]
@@ -216,18 +217,24 @@ pub fn validate_audio(audio_data: &[u8]) -> Result<()> {
 }
 
 /// RNNoise 降噪器
-/// 使用 nnnoiseless (纯 Rust RNNoise 移植) 进行音频降噪
+/// 使用 vendored RNNoise C 库（通过 cc 编译 + Rust FFI）进行音频降噪
 /// 处理 48kHz 音频，帧大小 480 样本 (10ms)
 pub struct NoiseReducer {
-    state: Box<DenoiseState<'static>>,
+    state: *mut rnnoise_ffi::DenoiseState,
     /// 降噪强度: 0.0 = 关闭, 1.0 = 最大降噪
     strength: f32,
 }
 
+unsafe impl Send for NoiseReducer {}
+
 impl NoiseReducer {
     pub fn new(strength: f32) -> Self {
+        let state = unsafe { rnnoise_ffi::rnnoise_create(std::ptr::null_mut()) };
+        if state.is_null() {
+            panic!("rnnoise_create returned null — out of memory?");
+        }
         Self {
-            state: DenoiseState::new(),
+            state,
             strength: strength.clamp(0.0, 1.0),
         }
     }
@@ -261,7 +268,9 @@ impl NoiseReducer {
             frame.copy_from_slice(&input_48k[start..start + 480]);
 
             let mut denoised = [0.0f32; 480];
-            self.state.process_frame(&mut denoised, &frame);
+            let _vad = unsafe {
+                rnnoise_ffi::rnnoise_process_frame(self.state, denoised.as_mut_ptr(), frame.as_ptr())
+            };
 
             // 按强度混合
             if self.strength < 1.0 {
@@ -298,6 +307,14 @@ impl NoiseReducer {
             }
         }
         out
+    }
+}
+
+impl Drop for NoiseReducer {
+    fn drop(&mut self) {
+        if !self.state.is_null() {
+            unsafe { rnnoise_ffi::rnnoise_destroy(self.state); }
+        }
     }
 }
 

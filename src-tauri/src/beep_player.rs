@@ -119,6 +119,8 @@ pub fn start_mic_monitor() {
                     return;
                 }
                 tracing::info!("环回监听: 已启动, 采样率={}, 声道={}, 格式={:?}", device_rate, channels, supported_config.sample_format());
+                // 独立环回模式：始终使用较高的降噪强度（不受 UI 强度影响，因为降噪强度滑块只影响录音路径）
+                reducer.set_strength(1.0);
                 // 处理循环：每 50ms 从 raw_f32 取数据，处理并播放
                 let mut last_pos = 0usize;
                 while LOOPBACK_STREAM_ON.load(Ordering::SeqCst) {
