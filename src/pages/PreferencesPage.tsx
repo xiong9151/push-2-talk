@@ -1,4 +1,4 @@
-import { Bug, Download, Power, RefreshCw, SlidersHorizontal, VolumeX, GraduationCap, Settings2, HelpCircle, Mic, AlertCircle, MessageSquareQuote, Ear, Volume2, Radio } from "lucide-react";
+import { Bug, Download, Power, RefreshCw, SlidersHorizontal, VolumeX, GraduationCap, Settings2, HelpCircle, Mic, AlertCircle, MessageSquareQuote } from "lucide-react";
 import { useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import type { AppStatus, UpdateStatus, LearningConfig, SharedLlmConfig, AudioDiagnostics } from "../types";
@@ -21,15 +21,6 @@ export type PreferencesPageProps = {
 
   enableAudioDebug: boolean;
   onSetEnableAudioDebug: (next: boolean) => Promise<void>;
-
-  noiseReductionStrength: number;
-  onSetNoiseReductionStrength: (next: number) => Promise<void>;
-
-  enableAec: boolean;
-  onSetEnableAec: (next: boolean) => Promise<void>;
-
-  enableLoopback: boolean;
-  onSetEnableLoopback: (next: boolean) => Promise<void>;
 
   theme: string;
   setTheme: (theme: string) => Promise<void>;
@@ -57,12 +48,6 @@ export function PreferencesPage({
   onSetEnableResultSelection,
   enableAudioDebug,
   onSetEnableAudioDebug,
-  noiseReductionStrength,
-  onSetNoiseReductionStrength,
-  enableAec,
-  onSetEnableAec,
-  enableLoopback,
-  onSetEnableLoopback,
   theme,
   setTheme,
   updateStatus,
@@ -380,110 +365,6 @@ export function PreferencesPage({
             size="sm"
             variant="blue"
           />
-        </div>
-
-        {/* 音频降噪 */}
-        <div className="space-y-3">
-          <div className="flex items-center gap-2 text-xs font-bold text-stone-500 uppercase tracking-widest">
-            <Ear size={14} />
-            <span>音频降噪</span>
-          </div>
-
-          {/* 降噪强度 */}
-          <div className="p-4 bg-[var(--paper)] border border-[var(--stone)] rounded-2xl space-y-3">
-            <div className="flex items-center justify-between">
-              <div className="flex items-center gap-3">
-                <div
-                  className={[
-                    "p-2 rounded-xl",
-                    noiseReductionStrength > 0
-                      ? "bg-[rgba(106,155,204,0.12)] text-[var(--steel)]"
-                      : "bg-white border border-[var(--stone)] text-stone-500",
-                  ].join(" ")}
-                >
-                  <Volume2 size={16} />
-                </div>
-                <div>
-                  <div className="text-sm font-bold text-[var(--ink)]">RNNoise 降噪强度</div>
-                  <div className="text-[11px] text-stone-400 font-semibold">
-                    使用 RNNoise 神经网络降噪，值越高降噪越强
-                  </div>
-                </div>
-              </div>
-            </div>
-            <div className="flex gap-1.5">
-              {[0, 25, 50, 75, 100].map((level) => (
-                <button
-                  key={level}
-                  onClick={() => void onSetNoiseReductionStrength(level)}
-                  className={[
-                    "flex-1 px-2 py-2 rounded-xl text-xs font-bold transition-all",
-                    noiseReductionStrength === level
-                      ? "bg-[var(--steel)] text-white shadow-sm"
-                      : "bg-white border border-[var(--stone)] text-stone-600 hover:border-stone-400",
-                  ].join(" ")}
-                >
-                  {level === 0 ? "关闭" : `${level}%`}
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* 回声消除 */}
-          <div className="flex items-center justify-between p-4 bg-[var(--paper)] border border-[var(--stone)] rounded-2xl">
-            <div className="flex items-center gap-3">
-              <div
-                className={[
-                  "p-2 rounded-xl",
-                  enableAec
-                    ? "bg-[rgba(106,155,204,0.12)] text-[var(--steel)]"
-                    : "bg-white border border-[var(--stone)] text-stone-500",
-                ].join(" ")}
-              >
-                <Radio size={16} />
-              </div>
-              <div>
-                <div className="text-sm font-bold text-[var(--ink)]">Speex 回声消除 (AEC)</div>
-                <div className="text-[11px] text-stone-400 font-semibold">
-                  通过 SpeexDSP 减少扬声器回声，适用外放场景
-                </div>
-              </div>
-            </div>
-            <Toggle
-              checked={enableAec}
-              onCheckedChange={(next) => { void onSetEnableAec(next); }}
-              size="sm"
-              variant="blue"
-            />
-          </div>
-
-          {/* 环回监听 */}
-          <div className="flex items-center justify-between p-4 bg-[var(--paper)] border border-[var(--stone)] rounded-2xl">
-            <div className="flex items-center gap-3">
-              <div
-                className={[
-                  "p-2 rounded-xl",
-                  enableLoopback
-                    ? "bg-[rgba(106,155,204,0.12)] text-[var(--steel)]"
-                    : "bg-white border border-[var(--stone)] text-stone-500",
-                ].join(" ")}
-              >
-                <Radio size={16} />
-              </div>
-              <div>
-                <div className="text-sm font-bold text-[var(--ink)]">环回监听 (Loopback)</div>
-                <div className="text-[11px] text-stone-400 font-semibold">
-                  实时将处理后的音频播放到扬声器，用于试听降噪效果
-                </div>
-              </div>
-            </div>
-            <Toggle
-              checked={enableLoopback}
-              onCheckedChange={(next) => { void onSetEnableLoopback(next); }}
-              size="sm"
-              variant="blue"
-            />
-          </div>
         </div>
 
         {/* 🎤 录音诊断 */}

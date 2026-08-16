@@ -1,6 +1,6 @@
 {
   "productName": "PushToTalk",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "identifier": "com.pushtotalk.desktop",
   "build": {
     "beforeDevCommand": "npm run dev",

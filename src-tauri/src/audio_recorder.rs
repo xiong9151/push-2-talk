@@ -5,7 +5,6 @@ use hound::{WavSpec, WavWriter};
 use std::io::Cursor;
 use std::path::PathBuf;
 use std::sync::{
-    atomic::{AtomicBool, Ordering},
     Arc, Mutex,
 };
 use tauri::AppHandle;
@@ -58,8 +57,6 @@ pub struct AudioRecorder {
     processed_audio: Arc<Mutex<Vec<f32>>>,
     // RNNoise 降噪器
     noise_reducer: Arc<Mutex<Option<NoiseReducer>>>,
-    // 环回监听开关：开启后将处理后的音频实时播放到扬声器
-    loopback_enabled: Arc<AtomicBool>,
     // SpeexDSP AEC 处理器（仅在 enable_aec 时初始化）
     #[cfg(feature = "aec")]
     aec_state: Arc<Mutex<Option<crate::aec::processor::AecProcessor>>>,
@@ -81,7 +78,6 @@ impl AudioRecorder {
             stream: SendStream::none(),
             processed_audio: Arc::new(Mutex::new(Vec::new())),
             noise_reducer: Arc::new(Mutex::new(None)),
-            loopback_enabled: Arc::new(AtomicBool::new(false)),
             #[cfg(feature = "aec")]
             aec_state: Arc::new(Mutex::new(None)),
             #[cfg(feature = "aec")]
@@ -276,12 +272,6 @@ impl AudioRecorder {
         // 保存 stream 引用，保持录音流活跃
         self.stream.set(stream);
 
-        // 如果环回监听已开启，初始化 Sink 准备播放
-        if self.loopback_enabled.load(Ordering::Acquire) {
-            crate::beep_player::init_loopback_sink();
-            tracing::info!("录音器环回监听已初始化");
-        }
-
         // 启动 loopback 环回采集（AEC 远端参考信号）
         #[cfg(feature = "aec")]
         {
@@ -313,18 +303,16 @@ impl AudioRecorder {
         } else {
             *reducer = None;
         }
-        self.loopback_enabled.store(config.enable_loopback, Ordering::Release);
         tracing::info!(
-            "录音器配置已更新: strength={}, loopback={}",
-            config.noise_reduction_strength,
-            config.enable_loopback
+            "录音器配置已更新: strength={}",
+            config.noise_reduction_strength
         );
 
         #[cfg(feature = "aec")]
         {
             use crate::aec::processor::AecProcessor;
             let mut aec = self.aec_state.lock().unwrap_or_else(|e| e.into_inner());
-            if config.enable_aec && config.enable_loopback {
+            if config.enable_aec {
                 *aec = Some(AecProcessor::new());
                 tracing::info!(
                     "录音器 AEC 已启用: frame_size={}, filter_length={}",
@@ -334,9 +322,6 @@ impl AudioRecorder {
             } else {
                 if aec.is_some() {
                     aec.take();
-                }
-                if config.enable_aec && !config.enable_loopback {
-                    tracing::warn!("AEC 已开启但环回监听未开启 — AEC 无参考信号，将作为 no-op");
                 }
             }
         }
@@ -348,9 +333,6 @@ impl AudioRecorder {
 
         // 停止录音
         *self.is_recording.lock().unwrap_or_else(|e| e.into_inner()) = false;
-
-        // 停止环回监听播放
-        crate::beep_player::stop_loopback();
 
         // Drop stream，停止音频流
         self.stream.clear();
@@ -447,17 +429,6 @@ impl AudioRecorder {
             }
         }
 
-        // 环回监听：将处理后的音频播放到扬声器
-        if self.loopback_enabled.load(Ordering::Acquire) {
-            // 对于离线模式，用 init_loopback_sink 初始化后通过 play_audio_buffer 播放
-            // 注意：此函数会阻塞 5 秒，用异步线程避免阻塞
-            let audio_samples = processed_audio_storage.clone();
-            std::thread::spawn(move || {
-                crate::beep_player::init_loopback_sink();
-                crate::beep_player::loopback_play(&audio_samples);
-            });
-        }
-
         // 4. 写入内存中的 WAV 格式（使用降噪后的音频，传入 ASR）
         let spec = WavSpec {
             channels: 1,
@@ -493,7 +464,6 @@ impl AudioRecorder {
     /// 停止录音并返回内存中的 WAV 数据，同时收集诊断信息
     pub fn stop_recording_with_diagnostics(&mut self) -> Result<(Vec<u8>, AudioDiagnostics)> {
         *self.is_recording.lock().unwrap_or_else(|e| e.into_inner()) = false;
-        crate::beep_player::stop_loopback();
         self.stream.clear();
         std::thread::sleep(std::time::Duration::from_millis(100));
 
@@ -613,9 +583,6 @@ impl AudioRecorder {
 
         // 停止录音
         *self.is_recording.lock().unwrap_or_else(|e| e.into_inner()) = false;
-
-        // 停止环回监听播放
-        crate::beep_player::stop_loopback();
 
         // Drop stream，停止音频流
         self.stream.clear();

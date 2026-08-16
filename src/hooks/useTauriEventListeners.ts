@@ -64,7 +64,6 @@ export type UseTauriEventListenersParams = {
   setResultSelectionEnabled?: React.Dispatch<React.SetStateAction<boolean>>;
   setNoiseReductionStrength?: React.Dispatch<React.SetStateAction<number>>;
   setEnableAec?: React.Dispatch<React.SetStateAction<boolean>>;
-  setEnableLoopback?: React.Dispatch<React.SetStateAction<boolean>>;
   onExternalConfigUpdated?: (config: AppConfig) => void;
   onBuiltinDictionaryUpdated?: () => void;
 
@@ -102,7 +101,6 @@ export function useTauriEventListeners({
   setEnableAudioDebug,
   setNoiseReductionStrength,
   setEnableAec,
-  setEnableLoopback,
   setTheme,
   setCloseAction,
   setDictionary,
@@ -304,7 +302,6 @@ export function useTauriEventListeners({
           setEnableAudioDebug?.(config.enable_audio_debug ?? false);
           setNoiseReductionStrength?.(config.noise_reduction_strength ?? 0);
           setEnableAec?.(config.enable_aec ?? false);
-          setEnableLoopback?.(config.enable_loopback ?? false);
           setTheme?.(config.theme || "light");
 
           if (config.dual_hotkey_config) {

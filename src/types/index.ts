@@ -167,7 +167,6 @@ export interface AppConfig {
   enable_audio_debug: boolean;
   noise_reduction_strength: number;
   enable_aec: boolean;
-  enable_loopback: boolean;
 }
 
 // 自定义 ASR 提供商配置

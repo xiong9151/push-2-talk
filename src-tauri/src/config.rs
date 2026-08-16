@@ -712,9 +712,6 @@ pub struct AppConfig {
     /// 启用回声消除 (SpeexDSP AEC)
     #[serde(default)]
     pub enable_aec: bool,
-    /// 启用环回监听（实时将处理后的音频播放到扬声器，用于试听降噪效果）
-    #[serde(default)]
-    pub enable_loopback: bool,
 }
 
 fn default_theme() -> String {
@@ -1441,7 +1438,6 @@ impl AppConfig {
             enable_audio_debug: false,
             noise_reduction_strength: 0,
             enable_aec: false,
-            enable_loopback: false,
         }
     }
 

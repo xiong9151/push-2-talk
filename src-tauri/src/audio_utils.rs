@@ -337,7 +337,6 @@ impl Drop for NoiseReducer {
 pub struct AudioProcessConfig {
     pub noise_reduction_strength: u8, // 0-100
     pub enable_aec: bool,
-    pub enable_loopback: bool, // 实时回放处理后的音频到扬声器（试听降噪效果）
 }
 
 impl Default for AudioProcessConfig {
@@ -345,7 +344,6 @@ impl Default for AudioProcessConfig {
         Self {
             noise_reduction_strength: 0,
             enable_aec: false,
-            enable_loopback: false,
         }
     }
 }

@@ -425,7 +425,6 @@ fn emit_config_updated(app: &AppHandle, config: &AppConfig) {
         "enable_audio_debug": config.enable_audio_debug,
         "noise_reduction_strength": config.noise_reduction_strength,
         "enable_aec": config.enable_aec,
-        "enable_loopback": config.enable_loopback,
     });
     let _ = app.emit("config_updated_light", theme_payload);
 }
@@ -845,7 +844,6 @@ struct ConfigFieldPatch {
     enable_audio_debug: Option<bool>,
     noise_reduction_strength: Option<u8>,
     enable_aec: Option<bool>,
-    enable_loopback: Option<bool>,
 }
 
 // Tauri Commands
@@ -967,7 +965,6 @@ async fn save_config(
             enable_audio_debug: existing.enable_audio_debug,
             noise_reduction_strength: existing.noise_reduction_strength,
             enable_aec: existing.enable_aec,
-            enable_loopback: existing.enable_loopback,
         };
 
         Ok(())
@@ -1118,14 +1115,9 @@ async fn patch_config_fields(app: AppHandle, patch: ConfigFieldPatch) -> Result<
 
         if let Some(strength) = patch.noise_reduction_strength {
             config.noise_reduction_strength = strength;
-            // 实时更新环回监听的降噪强度（无需重启）
-            beep_player::update_loopback_strength(strength);
         }
         if let Some(enabled) = patch.enable_aec {
             config.enable_aec = enabled;
-        }
-        if let Some(enabled) = patch.enable_loopback {
-            config.enable_loopback = enabled;
         }
 
         Ok(())
@@ -1137,7 +1129,6 @@ async fn patch_config_fields(app: AppHandle, patch: ConfigFieldPatch) -> Result<
     let audio_cfg = audio_utils::AudioProcessConfig {
         noise_reduction_strength: updated_config.noise_reduction_strength,
         enable_aec: updated_config.enable_aec,
-        enable_loopback: updated_config.enable_loopback,
     };
     let state = app.state::<AppState>();
     {
@@ -1158,15 +1149,6 @@ async fn patch_config_fields(app: AppHandle, patch: ConfigFieldPatch) -> Result<
             rec.set_audio_processing_config(&audio_cfg);
         }
     }
-
-    // 独立环回麦克风监听：打开开关后直接启动麦克风监听，关闭开关则停止
-    if let Some(enabled) = patch.enable_loopback {
-        if enabled {
-            let strength = updated_config.noise_reduction_strength as f32 / 100.0;
-            beep_player::start_mic_monitor(strength);
-        } else {
-            beep_player::stop_mic_monitor();
-        }
     }
 
     tracing::info!("[patch_config_fields] 配置已更新, theme={}", updated_config.theme);
@@ -2127,8 +2109,6 @@ async fn start_app(
     }
 
     // 应用降噪配置到录音器
-    let loopback_enabled: bool;
-    let loopback_strength: f32;
     {
         let config = load_persisted_config().unwrap_or_else(|e| {
             tracing::warn!("加载配置失败: {}", e);
@@ -2137,10 +2117,7 @@ async fn start_app(
         let audio_cfg = audio_utils::AudioProcessConfig {
             noise_reduction_strength: config.noise_reduction_strength,
             enable_aec: config.enable_aec,
-            enable_loopback: config.enable_loopback,
         };
-        loopback_enabled = config.enable_loopback;
-        loopback_strength = config.noise_reduction_strength as f32 / 100.0;
         if use_realtime_mode {
             if let Some(ref mut rec) = *state.streaming_recorder.lock().unwrap_or_else(|e| e.into_inner()) {
                 rec.set_audio_processing_config(&audio_cfg);
@@ -2150,13 +2127,6 @@ async fn start_app(
                 rec.set_audio_processing_config(&audio_cfg);
             }
         }
-    }
-
-    // 启动/停止独立环回麦克风监听（使用当前配置的降噪强度，用于确定档位）
-    if loopback_enabled {
-        beep_player::start_mic_monitor(loopback_strength);
-    } else {
-        beep_player::stop_mic_monitor();
     }
 
     // 启动全局快捷键监听（双模式支持）
@@ -4363,9 +4333,6 @@ async fn stop_app(app_handle: AppHandle) -> Result<String, String> {
     hide_result_panel_window(&app_handle).await;
 
     *state.is_running.lock().unwrap_or_else(|e| e.into_inner()) = false;
-
-    // 停止独立环回麦克风监听
-    beep_player::stop_mic_monitor();
 
     Ok("应用已停止".to_string())
 }
