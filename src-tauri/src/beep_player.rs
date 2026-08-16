@@ -73,6 +73,8 @@ pub fn start_mic_monitor(strength: f32) {
         // 降噪器和 AGC 状态
         let mut reducer = crate::audio_utils::NoiseReducer::new(strength);
         let mut agc_gain = 1.0f32;
+        // 预 AGC：在 RNNoise 之前提升低电平信号，避免静音误判
+        let mut pre_agc_gain = 1.0f32;
 
         // 格式无关的原始数据收集（所有格式都先转成 f32 再统一处理）
         let raw_f32: Arc<Mutex<Vec<f32>>> = Arc::new(Mutex::new(Vec::new()));
@@ -174,6 +176,11 @@ pub fn start_mic_monitor(strength: f32) {
                             if lo < mono.len() {
                                 resampled.push((mono[lo] as f64 * (1.0 - frac) + mono[hi] as f64 * frac) as f32);
                             }
+                        }
+                        // 预 AGC —— 在 RNNoise 之前提升低电平信号，避免静音误判
+                        // 有些麦克风电平低，RNNoise 会把正常说话误判为『无音频』直接消除
+                        for c in resampled.chunks_mut(3200) {
+                            crate::audio_utils::apply_agc(c, &mut pre_agc_gain);
                         }
                         // RNNoise 降噪优先（先去掉噪声，避免降噪把音量一起压小）
                         // 每次处理前从 LOOPBACK_STRENGTH 读取当前强度，支持运行时热更新
