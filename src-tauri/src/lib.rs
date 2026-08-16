@@ -2152,8 +2152,7 @@ async fn start_app(
 
     // 启动/停止独立环回麦克风监听（使用当前配置的降噪强度，用于确定档位）
     if loopback_enabled {
-        let strength = loopback_strength.unwrap_or(0.0);
-        beep_player::start_mic_monitor(strength);
+        beep_player::start_mic_monitor(loopback_strength);
     } else {
         beep_player::stop_mic_monitor();
     }
