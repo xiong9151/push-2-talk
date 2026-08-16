@@ -244,16 +244,21 @@ impl NoiseReducer {
     }
 
     /// 对音频块进行降噪处理
-    /// input: 16kHz f32 音频块
+    /// input: 16kHz f32 音频块（-1.0~1.0）
     /// output: 降噪后的 16kHz f32 音频块
     pub fn process(&mut self, input: &[f32]) -> Vec<f32> {
         if self.strength <= 0.0 || input.is_empty() || input.len() < 160 {
             return input.to_vec();
         }
 
-        // RNNoise 工作在 48kHz，帧大小 480 样本 (10ms)
-        // 16kHz → 48kHz：线性插值上采样（1:3），避免简单重复破坏频域特征
-        // 否则神经网络会把重复引入的高频谐波误判为语音信号
+        // RNNoise 官方 demo 在调用 rnnoise_process_frame 前会将
+        // PCM 16-bit 样本 (i16: -32768~32767) 直接作为 float 传入。
+        // 所以 f32 应在整数域 (-32768~32767)，而不是归一化域 (-1.0~1.0)。
+        // FFI 层把 -1.0~1.0 归一化 f32 放大到整数域，处理后再缩回。
+        let scale = 32768.0;
+
+        // RNNoise 需要 48kHz，帧大小 480 样本 (10ms)
+        // 16kHz → 48kHz：线性插值上采样（1:3）
         let input_48k = Self::resample_linear(input, 16000, 48000);
 
         // 对齐到 480 帧边界
@@ -267,16 +272,26 @@ impl NoiseReducer {
             let mut frame = [0.0f32; 480];
             frame.copy_from_slice(&input_48k[start..start + 480]);
 
+            // 放大到整数域
+            for s in frame.iter_mut() {
+                *s *= scale;
+            }
+
             let mut denoised = [0.0f32; 480];
             let _vad = unsafe {
                 rnnoise_ffi::rnnoise_process_frame(self.state, denoised.as_mut_ptr(), frame.as_ptr())
             };
 
-            // 按强度混合
+            // 按强度混合：strength=1.0 全降噪，strength=0.0 全原始（整数域）
             if self.strength < 1.0 {
                 for j in 0..480 {
                     denoised[j] = denoised[j] * self.strength + frame[j] * (1.0 - self.strength);
                 }
+            }
+
+            // 缩小回 f32 归一化域
+            for s in denoised.iter_mut() {
+                *s /= scale;
             }
 
             // 48kHz → 16kHz 降采样（3:1 抽取，取中间值减小 aliasing）
