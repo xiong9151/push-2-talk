@@ -1160,7 +1160,8 @@ async fn patch_config_fields(app: AppHandle, patch: ConfigFieldPatch) -> Result<
     // 独立环回麦克风监听：打开开关后直接启动麦克风监听，关闭开关则停止
     if let Some(enabled) = patch.enable_loopback {
         if enabled {
-            beep_player::start_mic_monitor();
+            let strength = updated_config.noise_reduction_strength as f32 / 100.0;
+            beep_player::start_mic_monitor(strength);
         } else {
             beep_player::stop_mic_monitor();
         }
@@ -2125,6 +2126,7 @@ async fn start_app(
 
     // 应用降噪配置到录音器
     let loopback_enabled: bool;
+    let loopback_strength: f32;
     {
         let config = load_persisted_config().unwrap_or_else(|e| {
             tracing::warn!("加载配置失败: {}", e);
@@ -2136,6 +2138,7 @@ async fn start_app(
             enable_loopback: config.enable_loopback,
         };
         loopback_enabled = config.enable_loopback;
+        loopback_strength = config.noise_reduction_strength as f32 / 100.0;
         if use_realtime_mode {
             if let Some(ref mut rec) = *state.streaming_recorder.lock().unwrap_or_else(|e| e.into_inner()) {
                 rec.set_audio_processing_config(&audio_cfg);
@@ -2147,9 +2150,10 @@ async fn start_app(
         }
     }
 
-    // 启动/停止独立环回麦克风监听
+    // 启动/停止独立环回麦克风监听（使用当前配置的降噪强度，用于确定档位）
     if loopback_enabled {
-        beep_player::start_mic_monitor();
+        let strength = loopback_strength.unwrap_or(0.0);
+        beep_player::start_mic_monitor(strength);
     } else {
         beep_player::stop_mic_monitor();
     }

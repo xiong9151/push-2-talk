@@ -23,7 +23,8 @@ static LOOPBACK_COUNTER: AtomicU64 = AtomicU64::new(0);
 static LOOPBACK_STREAM_ON: AtomicBool = AtomicBool::new(false);
 
 /// 启动独立麦克风监听环回 — 打开开关后实时采集麦克风，处理（降噪+AGC）后播放到扬声器
-pub fn start_mic_monitor() {
+/// strength: 降噪强度 0.0-1.0（试听的目的就是让用户确定档位，使用当前配置的强度）
+pub fn start_mic_monitor(strength: f32) {
     if LOOPBACK_STREAM_ON.load(Ordering::SeqCst) {
         return;
     }
@@ -55,7 +56,7 @@ pub fn start_mic_monitor() {
         let err_fn = |err| tracing::error!("环回监听流错误: {}", err);
 
         // 降噪器和 AGC 状态
-        let mut reducer = crate::audio_utils::NoiseReducer::new(0.8);
+        let mut reducer = crate::audio_utils::NoiseReducer::new(strength);
         let mut agc_gain = 1.0f32;
 
         // 格式无关的原始数据收集（所有格式都先转成 f32 再统一处理）
@@ -118,9 +119,7 @@ pub fn start_mic_monitor() {
                     LOOPBACK_STREAM_ON.store(false, Ordering::SeqCst);
                     return;
                 }
-                tracing::info!("环回监听: 已启动, 采样率={}, 声道={}, 格式={:?}", device_rate, channels, supported_config.sample_format());
-                // 独立环回模式：始终使用较高的降噪强度（不受 UI 强度影响，因为降噪强度滑块只影响录音路径）
-                reducer.set_strength(1.0);
+                tracing::info!("环回监听: 已启动, 采样率={}, 声道={}, 格式={:?}, 降噪强度={}", device_rate, channels, supported_config.sample_format(), strength);
                 // 处理循环：每 50ms 从 raw_f32 取数据，处理并播放
                 let mut last_pos = 0usize;
                 while LOOPBACK_STREAM_ON.load(Ordering::SeqCst) {
