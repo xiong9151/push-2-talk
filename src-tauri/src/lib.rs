@@ -1149,7 +1149,6 @@ async fn patch_config_fields(app: AppHandle, patch: ConfigFieldPatch) -> Result<
             rec.set_audio_processing_config(&audio_cfg);
         }
     }
-    }
 
     tracing::info!("[patch_config_fields] 配置已更新, theme={}", updated_config.theme);
 
