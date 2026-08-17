@@ -143,6 +143,7 @@ function App() {
   const [enableMuteOtherApps, setEnableMuteOtherApps] = useState(false);
   const [enableLiveTranscript, setEnableLiveTranscript] = useState(false);
   const [enableAudioDebug, setEnableAudioDebug] = useState(false);
+  const [noiseReductionStrength, setNoiseReductionStrength] = useState(0);
   const [theme, setTheme] = useState("light");
   const [closeAction, setCloseAction] = useState<"close" | "minimize" | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -401,6 +402,7 @@ function App() {
     enableMuteOtherApps,
     setEnableMuteOtherApps,
     setEnableLiveTranscript,
+    setNoiseReductionStrength,
     theme,
     setTheme,
     closeAction,
@@ -454,6 +456,7 @@ function App() {
     closeAction?: "close" | "minimize" | null;
     enableLiveTranscript?: boolean;
     enableAudioDebug?: boolean;
+    noiseReductionStrength?: number;
     enableResultSelection?: boolean;
   }) => {
     cancelAutoSaveDebounce();
@@ -471,6 +474,7 @@ function App() {
     const previousCloseAction = closeAction;
     const previousEnableLiveTranscript = enableLiveTranscript;
     const previousEnableAudioDebug = enableAudioDebug;
+    const previousNoiseReductionStrength = noiseReductionStrength;
 
     if (typeof patch.theme === "string") {
       setTheme(patch.theme);
@@ -490,6 +494,9 @@ function App() {
     }
     if (typeof patch.enableAudioDebug === "boolean") {
       setEnableAudioDebug(patch.enableAudioDebug);
+    }
+    if (typeof patch.noiseReductionStrength === "number") {
+      setNoiseReductionStrength(patch.noiseReductionStrength);
     }
 
     setSyncStatus("syncing");
@@ -519,6 +526,9 @@ function App() {
       if (typeof patch.enableAudioDebug === "boolean") {
         setEnableAudioDebug(previousEnableAudioDebug);
       }
+      if (typeof patch.noiseReductionStrength === "number") {
+        setNoiseReductionStrength(previousNoiseReductionStrength);
+      }
 
       setSyncStatus("error");
       syncTimeoutRef.current = window.setTimeout(() => {
@@ -535,6 +545,7 @@ function App() {
     closeAction,
     enableLiveTranscript,
     enableAudioDebug,
+    noiseReductionStrength,
     patchConfigFields,
     setTheme,
     setEnableMuteOtherApps,
@@ -542,6 +553,7 @@ function App() {
     setCloseAction,
     setEnableLiveTranscript,
     setEnableAudioDebug,
+    setNoiseReductionStrength,
     cancelAutoSaveDebounce,
     releaseConfigSyncWindow,
     updateSyncWindowSnapshot,
@@ -932,6 +944,10 @@ function App() {
             enableAudioDebug={enableAudioDebug}
             onSetEnableAudioDebug={async (next) => {
               await saveFieldPatchWithStatus({ enableAudioDebug: next });
+            }}
+            noiseReductionStrength={noiseReductionStrength}
+            onSetNoiseReductionStrength={async (next) => {
+              await saveFieldPatchWithStatus({ noiseReductionStrength: next });
             }}
             updateStatus={updateStatus}
             updateInfo={updateInfo}

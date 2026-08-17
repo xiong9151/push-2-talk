@@ -63,7 +63,6 @@ export type UseTauriEventListenersParams = {
   setCustomAsrProviders?: React.Dispatch<React.SetStateAction<CustomAsrProvider[]>>;
   setResultSelectionEnabled?: React.Dispatch<React.SetStateAction<boolean>>;
   setNoiseReductionStrength?: React.Dispatch<React.SetStateAction<number>>;
-  setEnableAec?: React.Dispatch<React.SetStateAction<boolean>>;
   onExternalConfigUpdated?: (config: AppConfig) => void;
   onBuiltinDictionaryUpdated?: () => void;
 
@@ -100,7 +99,6 @@ export function useTauriEventListeners({
   setEnableMuteOtherApps,
   setEnableAudioDebug,
   setNoiseReductionStrength,
-  setEnableAec,
   setTheme,
   setCloseAction,
   setDictionary,
@@ -301,7 +299,6 @@ export function useTauriEventListeners({
           setEnableMuteOtherApps?.(config.enable_mute_other_apps ?? false);
           setEnableAudioDebug?.(config.enable_audio_debug ?? false);
           setNoiseReductionStrength?.(config.noise_reduction_strength ?? 0);
-          setEnableAec?.(config.enable_aec ?? false);
           setTheme?.(config.theme || "light");
 
           if (config.dual_hotkey_config) {
